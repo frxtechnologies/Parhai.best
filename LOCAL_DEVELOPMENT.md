@@ -22,23 +22,22 @@ npm --version
 ## Clone The Repository
 
 ```bash
-git clone git@github.com:frxtechnologies/parhai-com.git
-cd parhai-com
+git clone https://github.com/frxtechnologies/Parhai.best.git
+cd Parhai.best
 ```
 
 ## Install Dependencies
 
-Use the committed lockfiles:
+Install both npm workspaces from the repository root:
 
 ```bash
-npm run install:all
+npm install
 ```
 
-Equivalent commands:
+For a clean CI-style reinstall, remove `node_modules` and use:
 
 ```bash
-npm --prefix frontend ci
-npm --prefix backend ci
+npm ci
 ```
 
 The repository is an npm workspace, so a root install prepares both applications.
@@ -61,14 +60,14 @@ For local development, `VITE_API_URL` may be blank because Vite proxies `/api` t
 
 ```env
 SUPABASE_URL=
+SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-OPENAI_API_KEY=
-OPENAI_CHAT_MODEL=
-OPENAI_EMBEDDING_MODEL=
-PORT=
-CORS_ORIGIN=
-NODE_ENV=
-LOG_LEVEL=
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash-lite
+PORT=3001
+CORS_ORIGIN=http://localhost:5173
+NODE_ENV=development
+LOG_LEVEL=info
 ```
 
 Recommended local non-secret settings:
@@ -84,18 +83,10 @@ Enter actual values only in local `.env` files or hosting-provider secret settin
 
 ## Run Locally
 
-Open two terminals from the repository root.
-
-Terminal 1:
+From the repository root, start the frontend and backend together:
 
 ```bash
-npm run dev:backend
-```
-
-Terminal 2:
-
-```bash
-npm run dev:frontend
+npm run dev
 ```
 
 Open:
@@ -110,15 +101,15 @@ Verify the API:
 http://localhost:3001/api/healthz
 ```
 
-The root `npm run dev` command starts only the frontend. The AI assistant and uploads require the backend process as well.
+`npm run dev` starts Vite on port 5173 and Express on port 3001. Press `Ctrl+C` once to stop both processes.
 
 ## Windows Commands
 
 Create environment files in PowerShell:
 
 ```powershell
-Copy-Item .env.example frontend/.env
-Copy-Item .env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
+Copy-Item backend/.env.example backend/.env
 ```
 
 Then remove irrelevant sections from each copied file and fill values locally.
@@ -126,15 +117,15 @@ Then remove irrelevant sections from each copied file and fill values locally.
 Run npm through `npm.cmd` if PowerShell execution policy interferes with `npm`:
 
 ```powershell
-npm.cmd run dev:backend
-npm.cmd run dev:frontend
+npm.cmd install
+npm.cmd run dev
 ```
 
 ## macOS And Linux Commands
 
 ```bash
-cp .env.example frontend/.env
-cp .env.example backend/.env
+cp frontend/.env.example frontend/.env
+cp backend/.env.example backend/.env
 ```
 
 Then edit each file and start the two processes.
@@ -142,7 +133,7 @@ Then edit each file and start the two processes.
 ## VS Code
 
 1. Open the repository root, not only `frontend/`.
-2. Use two integrated terminals.
+2. Use one integrated terminal for `npm run dev`; open another only for Git or quality checks.
 3. Keep TypeScript using the workspace version when prompted.
 4. Install extensions only as personal editor choices; do not commit workspace changes unless useful to every developer.
 5. Run `npm run typecheck` before committing.

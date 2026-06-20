@@ -19,7 +19,7 @@ Do not present future integrations as working features. The application intentio
 
 ## Repository
 
-The intended GitHub repository is `frxtechnologies/parhai-com`.
+GitHub repository: `frxtechnologies/Parhai.best`.
 
 ## Tech Stack
 
@@ -88,8 +88,8 @@ The intended GitHub repository is `frxtechnologies/parhai-com`.
 ## Quick Start
 
 ```bash
-git clone git@github.com:frxtechnologies/parhai-com.git
-cd parhai-com
+git clone https://github.com/frxtechnologies/Parhai.best.git
+cd Parhai.best
 npm install
 ```
 
