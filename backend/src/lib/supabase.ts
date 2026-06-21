@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
+import type { WebSocketLikeConstructor } from "@supabase/realtime-js";
 import WebSocket from "ws";
+
+const realtimeTransport = WebSocket as unknown as WebSocketLikeConstructor;
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serverKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -11,7 +14,7 @@ if (!supabaseUrl || !serverKey) {
 }
 
 export const supabaseAdmin = createClient(supabaseUrl, serverKey, {
-  realtime: { transport: WebSocket },
+  realtime: { transport: realtimeTransport },
   auth: {
     autoRefreshToken: false,
     persistSession: false,
@@ -20,7 +23,7 @@ export const supabaseAdmin = createClient(supabaseUrl, serverKey, {
 
 export function createUserClient(accessToken: string) {
   return createClient(supabaseUrl!, serverKey!, {
-    realtime: { transport: WebSocket },
+    realtime: { transport: realtimeTransport },
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
     auth: { autoRefreshToken: false, persistSession: false },
   });
