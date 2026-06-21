@@ -126,7 +126,7 @@ export interface AiMessage {
 
 export interface AiSource {
   chunkId: number;
-  sourceType: "paper" | "question" | "topic" | "marking_scheme" | "note";
+  sourceType: "resource" | "paper" | "question" | "topic" | "marking_scheme" | "note";
   paperId: number | null;
   year: number | null;
   session: string | null;

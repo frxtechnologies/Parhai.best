@@ -19,6 +19,7 @@ import PaperViewer from "@/pages/paper-viewer";
 import PaperAnalytics from "@/pages/paper-analytics";
 import PaperTesting from "@/pages/paper-testing";
 import AiAssistantTesting from "@/pages/ai-assistant-testing";
+import AdminResources from "@/pages/admin-resources";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -50,6 +51,7 @@ function Router() {
       <Route path="/admin" component={Admin} />
       <Route path="/admin/testing" component={PaperTesting} />
       <Route path="/admin/ai-testing" component={AiAssistantTesting} />
+      <Route path="/admin/resources" component={AdminResources} />
       <Route component={NotFound} />
     </Switch>
   );

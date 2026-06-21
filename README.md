@@ -93,6 +93,26 @@ cd Parhai.best
 npm install
 ```
 
+## Subject Resource Architecture
+
+Parhai uses three core Supabase tables for the subject library:
+
+- `subjects`: the O Level/A Level subject catalogue and syllabus codes.
+- `resources`: metadata for past papers, marking schemes, notes, syllabuses, and worksheets. Each row stores the subject, exam metadata, private Storage path, file information, and processing status.
+- `ai_chunks`: extracted resource text split into ordered, searchable chunks. Every chunk is linked to both `subject_id` and `resource_id`; deleting a resource cascades to its chunks.
+
+The private Supabase Storage bucket is `resources`. Signed-in students can read files through short-lived signed URLs. Only emails listed in `admin_users` can create, update, or delete subjects, resource rows, chunks, and Storage objects. Apply the ordered SQL files in `supabase/migrations/` when provisioning a new Supabase project.
+
+### Upload and AI flow
+
+1. An administrator opens `/admin/resources`, selects a subject and resource type, enters optional exam metadata, and uploads a PDF or text file.
+2. The browser uploads the file directly to the private `resources` bucket and inserts its metadata into `resources`.
+3. The authenticated backend downloads the stored file, extracts real text, splits it into overlapping chunks, and saves them in `ai_chunks`.
+4. The subject AI assistant searches only chunks for the selected subject. Only relevant chunks are sent to Gemini.
+5. Answers cite the stored resource title, year, and paper code. If matching chunks do not exist, the assistant returns the missing-source response instead of inventing an answer.
+
+Text-based PDFs and plain-text files are processed directly. Image-only scans require an OCR extension before they can produce AI chunks.
+
 Create two local environment files from `.env.example`:
 
 ```text
@@ -122,7 +142,7 @@ The active Vite frontend reads:
 
 ```env
 VITE_SUPABASE_URL=
-VITE_SUPABASE_ANON_KEY=
+VITE_SUPABASE_PUBLISHABLE_KEY=
 VITE_API_URL=
 ```
 
@@ -130,6 +150,7 @@ The active Express backend reads:
 
 ```env
 SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 OPENAI_API_KEY=
 OPENAI_CHAT_MODEL=
@@ -141,6 +162,8 @@ LOG_LEVEL=
 ```
 
 `GEMINI_API_KEY` is a backend-only secret used by the active assistant and paper-classification pipeline. No active route depends on n8n.
+
+`GEMINI_EMBEDDING_MODEL` defaults to `gemini-embedding-001`. Resource processing extracts text, stores chunks and 768-dimensional embeddings in `ai_chunks`, and updates `resources.status` through `uploaded`, `processing`, `processed`, or `failed`. Marking schemes are linked to past papers by subject, level, year, session, paper code, and variant.
 
 Never put `SUPABASE_SERVICE_ROLE_KEY` or an AI provider key in `frontend/.env`. Never commit `.env` files.
 
@@ -252,27 +275,18 @@ npm --prefix backend test
 
 ## Deployment
 
-Deploy the repository as two services.
+The repository includes `netlify.toml`, so Netlify deploys the Vite frontend and the Express API together.
 
-### Frontend Service
-
-```text
-Root directory: frontend
-Build command:  npm ci && npm run build
-Output:         dist
-```
-
-Configure SPA fallback so unknown routes serve `index.html`. Set `VITE_API_URL` to the public backend origin.
-
-### Backend Service
+### Netlify
 
 ```text
-Root directory: backend
-Build command:  npm ci && npm run build
-Start command:  npm start
+Base directory: repository root
+Build command:  npm run build:frontend
+Output:         frontend/dist
+Functions:      netlify/functions
 ```
 
-Set server-only Supabase and OpenAI variables in the hosting provider. Set `CORS_ORIGIN` to the deployed frontend origin. Do not expose backend secrets as frontend variables.
+The included redirects send `/api/*` to the Netlify API function and all other unknown paths to the SPA. Leave `VITE_API_URL` blank on Netlify. Add `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY` in Netlify environment variables. Add `GEMINI_API_KEY` for AI processing. `SUPABASE_SERVICE_ROLE_KEY` remains optional and server-only.
 
 ### Supabase
 

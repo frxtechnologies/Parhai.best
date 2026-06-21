@@ -1,10 +1,51 @@
 const apiKey = process.env.GEMINI_API_KEY;
 const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
+export const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001";
 
 export const GEMINI_NOT_CONFIGURED = "AI assistant is not configured yet. Please add GEMINI_API_KEY.";
 
 export function isGeminiConfigured() {
   return Boolean(apiKey);
+}
+
+async function embedBatch(texts: string[], taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY") {
+  if (!apiKey) throw new Error(GEMINI_NOT_CONFIGURED);
+  const modelName = `models/${GEMINI_EMBEDDING_MODEL}`;
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_EMBEDDING_MODEL)}:batchEmbedContents`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        requests: texts.map((text) => ({
+          model: modelName,
+          content: { parts: [{ text }] },
+          taskType,
+          outputDimensionality: 768,
+        })),
+      }),
+      signal: AbortSignal.timeout(45_000),
+    }
+  );
+  const body = await response.json() as { error?: { message?: string }; embeddings?: Array<{ values?: number[] }> };
+  if (!response.ok) throw new Error(body.error?.message ?? `Gemini embedding failed (${response.status}).`);
+  const embeddings = body.embeddings?.map((embedding) => embedding.values ?? []) ?? [];
+  if (embeddings.length !== texts.length || embeddings.some((embedding) => embedding.length !== 768)) {
+    throw new Error("Gemini returned an invalid embedding response.");
+  }
+  return embeddings;
+}
+
+export async function generateDocumentEmbeddings(texts: string[]) {
+  const embeddings: number[][] = [];
+  for (let offset = 0; offset < texts.length; offset += 20) {
+    embeddings.push(...await embedBatch(texts.slice(offset, offset + 20), "RETRIEVAL_DOCUMENT"));
+  }
+  return embeddings;
+}
+
+export async function generateQueryEmbedding(text: string) {
+  return (await embedBatch([text], "RETRIEVAL_QUERY"))[0]!;
 }
 
 export async function generateGroundedAnswer(systemInstruction: string, prompt: string) {

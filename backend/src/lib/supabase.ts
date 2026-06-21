@@ -1,10 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const serverKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+const serverKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  ?? process.env.SUPABASE_PUBLISHABLE_KEY
+  ?? process.env.SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !serverKey) {
-  throw new Error("SUPABASE_URL and either SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY must be set for the API server.");
+  throw new Error("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY (or SUPABASE_SERVICE_ROLE_KEY) must be set for the API server.");
 }
 
 export const supabaseAdmin = createClient(supabaseUrl, serverKey, {

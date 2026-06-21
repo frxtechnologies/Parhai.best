@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { generateGroundedAnswer, GEMINI_NOT_CONFIGURED, isGeminiConfigured } from "../lib/gemini";
+import { generateGroundedAnswer, generateQueryEmbedding, GEMINI_NOT_CONFIGURED, isGeminiConfigured } from "../lib/gemini";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 
@@ -20,13 +20,57 @@ const RequestBody = z.object({
 });
 
 type SourceResult = {
-  sourceType: "paper" | "question" | "topic" | "note";
+  sourceType: "resource" | "paper" | "question" | "topic" | "note";
   id: number;
   paperId: number | null;
   reference: string;
   content: string;
   metadata: Record<string, unknown>;
 };
+
+async function retrieveResourceSources(client: SupabaseClient, input: z.infer<typeof RequestBody>, subject: { id: number; name: string }) {
+  const { year, terms } = getFilters(input.message, input.year);
+  let resourcesQuery = client.from("resources")
+    .select("id,title,resource_type,year,session,paper_code,variant,processing_status")
+    .eq("subject_id", subject.id);
+  if (year) resourcesQuery = resourcesQuery.eq("year", year);
+
+  let chunksQuery = client.from("ai_chunks")
+    .select("id,resource_id,chunk_index,content,metadata,resources!inner(id,title,resource_type,year,session,paper_code,variant,processing_status)")
+    .eq("subject_id", subject.id);
+  if (year) chunksQuery = chunksQuery.eq("resources.year", year);
+  if (terms.length) chunksQuery = chunksQuery.or(terms.slice(0, 3).map((term) => `content.ilike.%${term}%`).join(","));
+
+  const queryEmbedding = await generateQueryEmbedding(input.message);
+  const semanticQuery = client.rpc("match_ai_chunks", {
+    query_embedding: `[${queryEmbedding.join(",")}]`,
+    match_subject_id: subject.id,
+    match_count: 12,
+    match_threshold: 0.25,
+  });
+  const [resources, chunks, semantic] = await Promise.all([resourcesQuery.order("year", { ascending: false }).limit(100), chunksQuery.limit(20), semanticQuery]);
+  if (resources.error) throw resources.error;
+  if (chunks.error) throw chunks.error;
+  if (semantic.error) throw semantic.error;
+  const keywordSources: SourceResult[] = (chunks.data ?? []).map((chunk) => {
+    const resource = Array.isArray(chunk.resources) ? chunk.resources[0] : chunk.resources;
+    const reference = `${subject.name}: ${resource?.title ?? "Resource"}${resource?.year ? ` (${resource.year})` : ""}${resource?.paper_code ? ` ${resource.paper_code}` : ""}`;
+    return { sourceType: "resource", id: chunk.id, paperId: null, reference, content: chunk.content.slice(0, 5000), metadata: { resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, title: resource?.title, resourceType: resource?.resource_type, year: resource?.year, session: resource?.session, paperCode: resource?.paper_code, variant: resource?.variant } };
+  });
+  const semanticSources: SourceResult[] = (semantic.data ?? [])
+    .filter((chunk: { metadata: Record<string, unknown> }) => !year || Number(chunk.metadata.year) === year)
+    .map((chunk: { id: number; resource_id: number; chunk_index: number; content: string; metadata: Record<string, unknown>; similarity: number }) => ({
+    sourceType: "resource",
+    id: chunk.id,
+    paperId: null,
+    reference: `${subject.name}: ${String(chunk.metadata.title ?? "Resource")}${chunk.metadata.year ? ` (${String(chunk.metadata.year)})` : ""}${chunk.metadata.paperCode ? ` ${String(chunk.metadata.paperCode)}` : ""}`,
+    content: chunk.content.slice(0, 5000),
+    metadata: { ...chunk.metadata, resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, similarity: chunk.similarity },
+    }));
+  const seen = new Set<number>();
+  const sources = [...semanticSources, ...keywordSources].filter((source) => !seen.has(source.id) && seen.add(source.id)).slice(0, 20);
+  return { resources: resources.data ?? [], sources };
+}
 
 const STOP_WORDS = new Set([
   "about", "all", "and", "answer", "appeared", "can", "find", "from", "how", "many", "paper", "papers",
@@ -115,11 +159,21 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     const { data: subject, error: subjectError } = await client.from("subjects").select("id,name,code,level").eq("id", input.subjectId).eq("level", input.level).single();
     if (subjectError || !subject) { res.status(404).json({ error: "Subject not found." }); return; }
 
-    const retrieval = await retrieveSources(client, input, subject);
-    const onlyUnprocessedPapers = retrieval.matchedPapers.length > 0 && retrieval.extractedQuestionCount === 0;
-    const diagnostics = { matchedPapers: retrieval.matchedPapers, extractedQuestionCount: retrieval.extractedQuestionCount, matchedQuestionRows: retrieval.matchedQuestions };
-    if (onlyUnprocessedPapers) { res.json({ answer: UNPROCESSED_PAPER_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
-    const retrieved = retrieval.sources;
+    const resourceRetrieval = await retrieveResourceSources(client, input, subject);
+    let diagnostics: Record<string, unknown>;
+    let retrieved: SourceResult[];
+    if (resourceRetrieval.resources.length) {
+      const unprocessed = resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
+      diagnostics = { matchedResources: resourceRetrieval.resources, matchedChunks: resourceRetrieval.sources.length };
+      if (unprocessed) { res.json({ answer: "This resource is uploaded but not processed yet. Please process it first.", sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
+      retrieved = resourceRetrieval.sources;
+    } else {
+      const retrieval = await retrieveSources(client, input, subject);
+      const onlyUnprocessedPapers = retrieval.matchedPapers.length > 0 && retrieval.extractedQuestionCount === 0;
+      diagnostics = { matchedPapers: retrieval.matchedPapers, extractedQuestionCount: retrieval.extractedQuestionCount, matchedQuestionRows: retrieval.matchedQuestions };
+      if (onlyUnprocessedPapers) { res.json({ answer: UNPROCESSED_PAPER_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
+      retrieved = retrieval.sources;
+    }
     if (retrieved.length === 0) { res.json({ answer: MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
 
     const context = retrieved.map((source, index) => `[Source ${index + 1}] ${source.reference}\nMetadata: ${JSON.stringify(source.metadata)}\n${source.content}`).join("\n\n");

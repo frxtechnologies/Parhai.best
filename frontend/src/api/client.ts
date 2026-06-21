@@ -23,7 +23,10 @@ import type {
 } from "./types";
 
 const LEGACY_DEMO_KEY = "parhai.demo.user";
-export const API_BASE_URL = import.meta.env.VITE_API_URL?.trim().replace(/\/$/, "") ?? "";
+const configuredApiUrl = import.meta.env.VITE_API_URL?.trim().replace(/\/$/, "") ?? "";
+export const API_BASE_URL = import.meta.env.PROD && /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(configuredApiUrl)
+  ? ""
+  : configuredApiUrl;
 
 type Level = "O_LEVEL" | "A_LEVEL";
 type PaperSession = "MAY_JUNE" | "OCT_NOV" | "FEB_MAR";
@@ -226,7 +229,7 @@ function mapQuestion(row: QuestionRow): Question {
   };
 }
 
-async function countBySubject(table: string, subjectIds: number[]) {
+async function countBySubject(table: string, subjectIds: number[], resourceType?: "PAST_PAPER" | "NOTES") {
   const client = requireSupabase();
   const counts = new Map<number, number>();
   await Promise.all(
@@ -236,6 +239,7 @@ async function countBySubject(table: string, subjectIds: number[]) {
         .select("id", { count: "exact", head: true })
         .eq("subject_id", subjectId);
       if (table === "papers") query = query.in("ingestion_status", ["ready", "ready_without_embeddings", "ready_without_processing"]);
+      if (table === "resources" && resourceType) query = query.eq("resource_type", resourceType);
       const { count, error } = await query;
       if (error) throw error;
       counts.set(subjectId, count ?? 0);
@@ -255,8 +259,8 @@ async function listSubjects(params?: ListSubjectsParams): Promise<Subject[]> {
   const rows = (data ?? []) as SubjectRow[];
   const ids = rows.map((row) => row.id);
   const [paperCounts, noteCounts, questionCounts] = await Promise.all([
-    countBySubject("papers", ids),
-    countBySubject("notes", ids),
+    countBySubject("resources", ids, "PAST_PAPER"),
+    countBySubject("resources", ids, "NOTES"),
     countBySubject("questions", ids),
   ]);
 
@@ -315,9 +319,39 @@ async function uploadPdfDirect(input: DirectPdfUploadInput): Promise<DirectPdfUp
   });
   if (uploadError) throw uploadError;
 
+  let resourceId: number | null = null;
   try {
     const { data: authData } = await client.auth.getUser();
     if (!authData.user) throw new Error("Please sign in again before uploading.");
+
+    const canonicalType = input.resourceType === "PAPER"
+      ? "PAST_PAPER"
+      : input.resourceType === "MARKING_SCHEME"
+        ? "MARKING_SCHEME"
+        : input.resourceType === "NOTE"
+          ? "NOTES"
+          : "OTHER";
+    const { data: resource, error: resourceError } = await client.from("resources").insert({
+      subject_id: input.subjectId,
+      level: input.level,
+      resource_type: canonicalType,
+      title: input.title,
+      year: input.resourceType === "NOTE" ? null : input.year,
+      session: input.resourceType === "NOTE" ? null : input.session,
+      paper_code: input.resourceType === "NOTE" ? null : String(input.paperNumber),
+      variant: input.resourceType === "NOTE" ? null : input.variant,
+      bucket,
+      storage_path: path,
+      file_path: path,
+      file_url: path,
+      original_filename: input.file.name,
+      file_type: input.file.type || "application/pdf",
+      file_size_bytes: input.file.size,
+      status: "uploaded",
+      processing_status: "pending",
+    }).select("id").single();
+    if (resourceError || !resource) throw resourceError ?? new Error("Could not save resource metadata.");
+    resourceId = Number(resource.id);
 
     if (input.resourceType === "PAPER" || input.resourceType === "EXAMINER_REPORT") {
       const { data, error } = await client.from("papers").insert({
@@ -340,6 +374,7 @@ async function uploadPdfDirect(input: DirectPdfUploadInput): Promise<DirectPdfUp
       }).select("id").single();
       if (error || !data) throw error ?? new Error("Could not save paper metadata.");
       await client.from("uploads").insert({ user_id: authData.user.id, subject_id: input.subjectId, paper_id: data.id, source_type: input.resourceType === "EXAMINER_REPORT" ? "EXAMINER_REPORT" : "QUESTION_PAPER", bucket, storage_path: path, original_filename: input.file.name, file_type: input.file.type || "application/pdf", file_size_bytes: input.file.size, status: "uploaded" });
+      void client.auth.getSession().then(({ data: sessionData }) => fetch(`${API_BASE_URL}/api/resources/${resourceId}/process`, { method: "POST", headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ""}` } })).catch(() => undefined);
       return { bucket, path, metadataId: Number(data.id) };
     }
 
@@ -355,6 +390,7 @@ async function uploadPdfDirect(input: DirectPdfUploadInput): Promise<DirectPdfUp
       }, { onConflict: "paper_id" }).select("id").single();
       if (error || !data) throw error ?? new Error("Could not save marking-scheme metadata.");
       await client.from("uploads").insert({ user_id: authData.user.id, subject_id: input.subjectId, paper_id: input.relatedPaperId, source_type: "MARK_SCHEME", bucket, storage_path: path, original_filename: input.file.name, file_type: input.file.type || "application/pdf", file_size_bytes: input.file.size, status: "uploaded" });
+      void client.auth.getSession().then(({ data: sessionData }) => fetch(`${API_BASE_URL}/api/resources/${resourceId}/process`, { method: "POST", headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ""}` } })).catch(() => undefined);
       return { bucket, path, metadataId: Number(data.id) };
     }
 
@@ -370,8 +406,10 @@ async function uploadPdfDirect(input: DirectPdfUploadInput): Promise<DirectPdfUp
     }).select("id").single();
     if (error || !data) throw error ?? new Error("Could not save note metadata.");
     await client.from("uploads").insert({ user_id: authData.user.id, subject_id: input.subjectId, source_type: "NOTE", bucket, storage_path: path, original_filename: input.file.name, file_type: input.file.type || "application/pdf", file_size_bytes: input.file.size, status: "uploaded" });
+    void client.auth.getSession().then(({ data: sessionData }) => fetch(`${API_BASE_URL}/api/resources/${resourceId}/process`, { method: "POST", headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ""}` } })).catch(() => undefined);
     return { bucket, path, metadataId: Number(data.id) };
   } catch (error) {
+    if (resourceId !== null) await client.from("resources").delete().eq("id", resourceId);
     await client.storage.from(bucket).remove([path]);
     throw error;
   }

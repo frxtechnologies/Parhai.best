@@ -57,7 +57,7 @@ export default function Login() {
     const cleanEmail = email.trim().toLowerCase();
 
     if (!isSupabaseConfigured) {
-      setError("Supabase is not connected. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to frontend/.env.");
+      setError("Supabase is not connected. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.");
       return;
     }
     if (!cleanEmail || !password) {
@@ -144,7 +144,7 @@ export default function Login() {
               <LockKeyhole className="h-4 w-4" />
               Supabase is not connected
             </div>
-            Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to `frontend/.env`.
+            Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` to the deployment environment.
           </div>
         )}
 

@@ -1,42 +1,59 @@
 import { AppLayout } from "@/components/layout/app-layout";
+import { requireSupabase } from "@/lib/supabase";
 import {
   getGetSubjectQueryKey,
   useGetSubject,
-  useListNotes,
-  useListPapers,
   useListQuestions,
 } from "@/api/client";
 import {
-  BookMarked,
   BookOpen,
   Bot,
   CheckCircle2,
-  Clock,
-  Download,
   Eye,
-  FilePenLine,
   FileText,
   LineChart,
   Star,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "wouter";
 
-const TABS = ["papers", "schemes", "notes", "questions", "ai", "saved", "progress"] as const;
+const TABS = ["papers", "schemes", "notes", "worksheets", "tests", "topicals", "questions", "ai", "saved", "progress"] as const;
 type Tab = (typeof TABS)[number];
+type StudyResource = { id: number; title: string; resource_type: "PAST_PAPER" | "MARKING_SCHEME" | "NOTES" | "WORKSHEET" | "TEST" | "TOPICAL" | "SYLLABUS" | "OTHER"; year: number | null; session: string | null; paper_code: string | null; variant: number | null; bucket: string; storage_path: string; status: string; processing_status: string; related_resource_id: number | null };
+const RESOURCE_TYPES: StudyResource["resource_type"][] = ["PAST_PAPER", "MARKING_SCHEME", "NOTES", "WORKSHEET", "TEST", "TOPICAL", "SYLLABUS", "OTHER"];
+const resourceLabel = (type: StudyResource["resource_type"]) => ({ PAST_PAPER: "Past papers", MARKING_SCHEME: "Marking schemes", NOTES: "Notes", WORKSHEET: "Worksheets", TEST: "Tests", TOPICAL: "Topicals", SYLLABUS: "Syllabus", OTHER: "Other resources" })[type];
 
 export default function SubjectDetail() {
   const params = useParams();
   const subjectId = Number.parseInt(params.id || "0", 10);
   const [activeTab, setActiveTab] = useState<Tab>("papers");
   const [revealed, setRevealed] = useState<Record<number, boolean>>({});
+  const [resources, setResources] = useState<StudyResource[]>([]);
+  const [resourceError, setResourceError] = useState("");
 
   const { data: subject, isLoading } = useGetSubject(subjectId, {
     query: { enabled: !!subjectId, queryKey: getGetSubjectQueryKey(subjectId) },
   });
-  const { data: papers } = useListPapers({ subjectId }, { query: { queryKey: ["/api/papers", { subjectId }] } });
-  const { data: notes } = useListNotes({ subjectId }, { query: { queryKey: ["/api/notes", { subjectId }] } });
   const { data: questions } = useListQuestions({ subjectId }, { query: { queryKey: ["/api/questions", { subjectId }] } });
+  useEffect(() => {
+    if (!subjectId) return;
+    const client = requireSupabase();
+    const loadResources = async () => {
+      const results = await Promise.all(RESOURCE_TYPES.map((resourceType) => client.from("resources").select("id,title,resource_type,year,session,paper_code,variant,bucket,storage_path,status,processing_status,related_resource_id").eq("subject_id", subjectId).eq("resource_type", resourceType).order("year", { ascending: false })));
+      const failed = results.find((result) => result.error);
+      if (failed?.error) { console.error("[resources] subject load failed", { subjectId, error: failed.error }); setResourceError(failed.error.message); }
+      else { setResourceError(""); setResources(results.flatMap((result) => (result.data ?? []) as StudyResource[])); }
+    };
+    void loadResources();
+    const channel = client.channel(`subject-resources-${subjectId}`).on("postgres_changes", { event: "*", schema: "public", table: "resources", filter: `subject_id=eq.${subjectId}` }, () => { void loadResources(); }).subscribe();
+    return () => { void client.removeChannel(channel); };
+  }, [subjectId]);
+
+  async function openStudyResource(resource: StudyResource) {
+    const { data, error } = await requireSupabase().storage.from(resource.bucket).createSignedUrl(resource.storage_path, 3600);
+    if (error || !data) { setResourceError(error?.message ?? "Could not open resource."); return; }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
 
   if (isLoading) {
     return (
@@ -54,8 +71,12 @@ export default function SubjectDetail() {
     );
   }
 
-  const questionPapers = papers?.filter((paper) => paper.type === "PAST_PAPER") ?? [];
-  const markSchemes = papers?.filter((paper) => paper.type === "MARKING_SCHEME") ?? [];
+  const questionPapers = resources.filter((resource) => resource.resource_type === "PAST_PAPER");
+  const markSchemes = resources.filter((resource) => resource.resource_type === "MARKING_SCHEME");
+  const notes = resources.filter((resource) => resource.resource_type === "NOTES");
+  const worksheets = resources.filter((resource) => resource.resource_type === "WORKSHEET");
+  const tests = resources.filter((resource) => resource.resource_type === "TEST");
+  const topicals = resources.filter((resource) => resource.resource_type === "TOPICAL");
   return (
     <AppLayout>
       <div className="space-y-8">
@@ -80,6 +101,18 @@ export default function SubjectDetail() {
           </Link>
         </header>
 
+        <section className="space-y-5">
+          <div><h2 className="text-2xl font-bold text-[#0B1F3A]">Study resources</h2><p className="text-sm text-gray-500">Everything uploaded for this subject, organised by resource type.</p></div>
+          {resourceError&&<p className="rounded-xl bg-red-50 p-3 text-sm text-red-600">{resourceError}</p>}
+          <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
+            {RESOURCE_TYPES.map((type) => {
+              const items = resources.filter((resource) => resource.resource_type === type);
+              const label = resourceLabel(type);
+              return <div key={type} className="rounded-2xl border bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><h3 className="font-bold text-[#0B1F3A]">{label}</h3><span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-gray-500">{items.length}</span></div><div className="space-y-3">{items.map((resource)=><button key={resource.id} onClick={()=>openStudyResource(resource)} className="block w-full rounded-xl border p-3 text-left transition-colors hover:border-[#14B8A6] hover:bg-cyan-50/40"><p className="font-semibold text-[#0B1F3A]">{resource.title}</p><p className="mt-1 text-xs text-gray-500">{resource.year??"General"}{resource.session?` · ${resource.session.replace("_"," ")}`:""}{resource.paper_code?` · ${resource.paper_code}`:""}{resource.variant?` v${resource.variant}`:""}</p></button>)}{!items.length&&<p className="rounded-xl border border-dashed p-4 text-center text-sm text-gray-400">No {label.toLowerCase()} yet.</p>}</div></div>;
+            })}
+          </div>
+        </section>
+
         <div className="flex gap-2 bg-white border rounded-xl p-1 overflow-x-auto">
           {TABS.map((tab) => (
             <button
@@ -96,7 +129,13 @@ export default function SubjectDetail() {
                   : tab === "questions"
                     ? `Topical Questions (${questions?.length ?? 0})`
                     : tab === "notes"
-                      ? `Notes (${notes?.length ?? 0})`
+                      ? `Notes (${notes.length})`
+                      : tab === "worksheets"
+                        ? `Worksheets (${worksheets.length})`
+                        : tab === "tests"
+                          ? `Tests (${tests.length})`
+                          : tab === "topicals"
+                            ? `Topicals (${topicals.length})`
                       : tab === "ai"
                         ? "AI Tutor"
                         : tab === "saved"
@@ -107,20 +146,14 @@ export default function SubjectDetail() {
         </div>
 
         {activeTab === "papers" && (
-          <PaperList
-            emptyText="No papers available yet"
-            icon="paper"
-            papers={questionPapers}
-            subjectColor={subject.color}
-          />
+          <PaperGroups papers={questionPapers} markingSchemes={markSchemes} onOpen={openStudyResource} />
         )}
 
         {activeTab === "schemes" && (
-          <PaperList
+          <StudyResourceList
             emptyText="No mark schemes available yet"
-            icon="scheme"
-            papers={markSchemes}
-            subjectColor={subject.color}
+            resources={markSchemes}
+            onOpen={openStudyResource}
           />
         )}
 
@@ -183,32 +216,12 @@ export default function SubjectDetail() {
         )}
 
         {activeTab === "notes" && (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {notes?.map((note) => (
-              <div key={note.id} className="bg-white rounded-xl border p-6 hover:shadow-md transition-shadow cursor-pointer group">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="p-2 bg-cyan-50 rounded-lg group-hover:bg-[#0B1F3A] transition-colors">
-                    <FilePenLine className="h-5 w-5 text-[#0B1F3A] group-hover:text-white" />
-                  </div>
-                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{note.topic}</span>
-                </div>
-                <h3 className="font-bold text-lg text-[#0B1F3A] mb-2 line-clamp-2">{note.title}</h3>
-                <p className="text-sm text-gray-400 mb-4 line-clamp-2">{note.summary}</p>
-                <div className="flex items-center justify-between text-xs text-gray-400 border-t pt-4">
-                  <span className="truncate">{note.topic}</span>
-                  <span className="flex items-center gap-1 shrink-0 ml-2">
-                    <Clock className="h-3 w-3" /> {note.readingTime} min
-                  </span>
-                </div>
-              </div>
-            ))}
-            {(!notes || notes.length === 0) && (
-              <div className="md:col-span-2 lg:col-span-3 bg-white rounded-xl border p-12 text-center text-gray-400">
-                No notes available yet
-              </div>
-            )}
-          </div>
+          <StudyResourceList resources={notes} emptyText="No notes available yet" onOpen={openStudyResource} />
         )}
+
+        {activeTab === "worksheets" && <StudyResourceList resources={worksheets} emptyText="No worksheets available yet" onOpen={openStudyResource} />}
+        {activeTab === "tests" && <StudyResourceList resources={tests} emptyText="No tests available yet" onOpen={openStudyResource} />}
+        {activeTab === "topicals" && <StudyResourceList resources={topicals} emptyText="No topicals available yet" onOpen={openStudyResource} />}
 
         {activeTab === "ai" && (
           <div className="bg-white rounded-2xl border p-8 flex flex-col md:flex-row gap-6 md:items-center justify-between">
@@ -265,7 +278,7 @@ export default function SubjectDetail() {
               <div className="grid sm:grid-cols-3 gap-4">
                 <Metric label="Papers ready" value={questionPapers.length} />
                 <Metric label="Topical questions" value={questions?.length ?? 0} />
-                <Metric label="Revision notes" value={notes?.length ?? 0} />
+                <Metric label="Revision notes" value={notes.length} />
               </div>
             </div>
             <div className="bg-[#0B1F3A] text-white rounded-2xl p-6">
@@ -282,46 +295,47 @@ export default function SubjectDetail() {
   );
 }
 
-function PaperList({
+function PaperGroups({ papers, markingSchemes, onOpen }: { papers: StudyResource[]; markingSchemes: StudyResource[]; onOpen: (resource: StudyResource) => void }) {
+  const groups = new Map<string, StudyResource[]>();
+  for (const paper of papers) {
+    const key = `${paper.year ?? "General"} · ${paper.session?.replace("_", " ") ?? "No session"}`;
+    groups.set(key, [...(groups.get(key) ?? []), paper]);
+  }
+  if (!papers.length) return <div className="rounded-xl border bg-white p-12 text-center text-gray-400">No papers available yet</div>;
+  return <div className="space-y-5">{[...groups.entries()].map(([group, rows]) => <section key={group} className="overflow-hidden rounded-xl border bg-white"><h3 className="border-b bg-slate-50 px-5 py-3 font-bold text-[#0B1F3A]">{group}</h3><div className="divide-y">{rows.sort((a,b)=>(a.paper_code??"").localeCompare(b.paper_code??"") || (a.variant??0)-(b.variant??0)).map((paper)=>{const scheme=markingSchemes.find((item)=>item.related_resource_id===paper.id);return <div key={paper.id} className="flex flex-wrap items-center gap-3 p-4"><FileText className="h-5 w-5 text-gray-400"/><div className="min-w-0 flex-1"><p className="truncate font-semibold text-[#0B1F3A]">{paper.title}</p><p className="text-sm text-gray-400">{paper.paper_code??"No paper code"}{paper.variant?` · v${paper.variant}`:""} · {paper.status}</p></div><button onClick={()=>onOpen(paper)} className="rounded-lg border px-3 py-2 text-sm">Question paper</button>{scheme?<button onClick={()=>onOpen(scheme)} className="rounded-lg bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">Marking scheme</button>:<span className="text-xs text-gray-400">No marking scheme linked</span>}</div>})}</div></section>)}</div>;
+}
+
+function StudyResourceList({
   emptyText,
-  icon,
-  papers,
+  resources,
+  onOpen,
 }: {
   emptyText: string;
-  icon: "paper" | "scheme";
-  papers: NonNullable<ReturnType<typeof useListPapers>["data"]>;
-  subjectColor: string;
+  resources: StudyResource[];
+  onOpen: (resource: StudyResource) => void;
 }) {
   return (
     <div className="bg-white rounded-xl border overflow-hidden">
       <div className="divide-y">
-        {papers.map((paper) => (
-          <div key={paper.id} className="p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-gray-50 transition-colors">
-            {icon === "scheme" ? (
-              <BookMarked className="h-5 w-5 text-blue-500 shrink-0" />
-            ) : (
-              <FileText className="h-5 w-5 text-gray-400 shrink-0" />
-            )}
+        {resources.map((resource) => (
+          <div key={resource.id} className="p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-gray-50 transition-colors">
+            <FileText className="h-5 w-5 text-gray-400 shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="font-semibold text-[#0B1F3A] truncate">{paper.title}</div>
+              <div className="font-semibold text-[#0B1F3A] truncate">{resource.title}</div>
               <div className="text-sm text-gray-400">
-                {paper.session.replace("_", " ")} {paper.year} - P{paper.paperNumber}
-                {paper.variant ? ` v${paper.variant}` : ""}
+                {resource.year ?? "General"}{resource.session ? ` · ${resource.session.replace("_", " ")}` : ""}
+                {resource.paper_code ? ` · ${resource.paper_code}` : ""}{resource.variant ? ` v${resource.variant}` : ""}
               </div>
             </div>
-            <span
-              className={`px-2 py-1 rounded text-xs font-medium ${
-                paper.type === "MARKING_SCHEME" ? "bg-blue-50 text-blue-700" : "bg-gray-100 text-gray-600"
-              }`}
-            >
-              {paper.type === "MARKING_SCHEME" ? "MS" : "QP"}
+            <span className="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
+              {resource.resource_type.replace("_", " ")}
             </span>
-            <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Download resource">
-              <Download className="h-4 w-4 text-gray-400" />
+            <button onClick={() => onOpen(resource)} className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-100" title="Open resource">
+              Open
             </button>
           </div>
         ))}
-        {papers.length === 0 && <div className="p-12 text-center text-gray-400">{emptyText}</div>}
+        {resources.length === 0 && <div className="p-12 text-center text-gray-400">{emptyText}</div>}
       </div>
     </div>
   );

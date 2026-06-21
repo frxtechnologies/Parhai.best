@@ -5,6 +5,10 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
+const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:5173,https://parhais.netlify.app")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
 
 app.use(
   pinoHttp({
@@ -21,7 +25,10 @@ app.use(
 );
 
 app.use(cors({
-  origin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ""))) callback(null, true);
+    else callback(new Error("Origin is not allowed by CORS"));
+  },
   credentials: true,
 }));
 app.use(express.json());
