@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import WebSocket from "ws";
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serverKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -10,6 +11,7 @@ if (!supabaseUrl || !serverKey) {
 }
 
 export const supabaseAdmin = createClient(supabaseUrl, serverKey, {
+  realtime: { transport: WebSocket },
   auth: {
     autoRefreshToken: false,
     persistSession: false,
@@ -18,6 +20,7 @@ export const supabaseAdmin = createClient(supabaseUrl, serverKey, {
 
 export function createUserClient(accessToken: string) {
   return createClient(supabaseUrl!, serverKey!, {
+    realtime: { transport: WebSocket },
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
     auth: { autoRefreshToken: false, persistSession: false },
   });
