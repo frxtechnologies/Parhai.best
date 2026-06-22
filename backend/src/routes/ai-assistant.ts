@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
+import { expandSearchTerms, finalizeGroundedAnswer, formatCitation, rankEvidence } from "../services/rag-utils";
 
 const router: IRouter = Router();
 const MISSING_SOURCE_MESSAGE = "I could not find this in the uploaded papers yet.";
@@ -17,7 +18,7 @@ const RequestBody = z.object({
   board: z.string().trim().min(1).max(80).optional(),
   selectedPaperId: z.coerce.number().int().positive().nullable().optional(),
   year: z.coerce.number().int().min(1990).max(2100).nullable().optional(),
-  chatHistory: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(4000) })).max(20).optional(),
+  chatHistory: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(4000) })).max(100).transform((history) => history.slice(-20)).optional(),
   debug: z.boolean().optional().default(false),
 });
 
@@ -30,7 +31,7 @@ type SourceResult = {
   metadata: Record<string, unknown>;
 };
 
-async function retrieveResourceSources(client: SupabaseClient, input: z.infer<typeof RequestBody>, subject: { id: number; name: string }) {
+async function retrieveResourceSources(client: SupabaseClient, input: z.infer<typeof RequestBody>, subject: { id: number; name: string; code: string }) {
   const { year, terms } = getFilters(input.message, input.year);
   let resourcesQuery = client.from("resources")
     .select("id,title,resource_type,year,session,paper_code,variant,processing_status")
@@ -48,7 +49,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     query_embedding: `[${queryEmbedding.join(",")}]`,
     match_subject_id: subject.id,
     match_count: 12,
-    match_threshold: 0.25,
+    match_threshold: 0.12,
   });
   let indexedQuery = client.from("question_index")
     .select("id,resource_id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,source_file,year,session,paper_code,variant,resources!inner(title,is_approved)")
@@ -62,8 +63,8 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   if (indexed.error) throw indexed.error;
   const keywordSources: SourceResult[] = (chunks.data ?? []).map((chunk) => {
     const resource = Array.isArray(chunk.resources) ? chunk.resources[0] : chunk.resources;
-    const reference = `${subject.name}: ${resource?.title ?? "Resource"}${resource?.year ? ` (${resource.year})` : ""}${resource?.paper_code ? ` ${resource.paper_code}` : ""}`;
-    return { sourceType: "resource", id: chunk.id, paperId: null, reference, content: chunk.content.slice(0, 5000), metadata: { resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, title: resource?.title, resourceType: resource?.resource_type, year: resource?.year, session: resource?.session, paperCode: resource?.paper_code, variant: resource?.variant } };
+    const metadata = { resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, title: resource?.title, resourceType: resource?.resource_type, year: resource?.year, session: resource?.session, paperCode: resource?.paper_code, variant: resource?.variant, sourceFile: chunk.metadata?.sourceFile };
+    return { sourceType: "resource", id: chunk.id, paperId: null, reference: formatCitation(subject, metadata), content: chunk.content.slice(0, 5000), metadata };
   });
   const semanticSources: SourceResult[] = (semantic.data ?? [])
     .filter((chunk: { metadata: Record<string, unknown> }) => !year || Number(chunk.metadata.year) === year)
@@ -71,7 +72,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     sourceType: "resource",
     id: chunk.id,
     paperId: null,
-    reference: `${subject.name}: ${String(chunk.metadata.title ?? "Resource")}${chunk.metadata.year ? ` (${String(chunk.metadata.year)})` : ""}${chunk.metadata.paperCode ? ` ${String(chunk.metadata.paperCode)}` : ""}`,
+    reference: formatCitation(subject, chunk.metadata),
     content: chunk.content.slice(0, 5000),
     metadata: { ...chunk.metadata, resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, similarity: chunk.similarity },
     }));
@@ -79,31 +80,19 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     sourceType: "question",
     id: row.id,
     paperId: null,
-    reference: `${subject.name} ${row.paper_code ?? "paper"} ${row.session ?? ""} ${row.year ?? ""}${row.variant ? ` Variant ${row.variant}` : ""}, Question ${row.question_number}`.replace(/\s+/g, " ").trim(),
+    reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
     content: `Question: ${row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
     metadata: { resourceId: row.resource_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
   }));
   const seen = new Set<string>();
-  const sources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
+  const uniqueSources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
     const key = `${source.sourceType}:${source.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, 30);
+  });
+  const sources = rankEvidence(uniqueSources, terms, 12);
   return { resources: resources.data ?? [], sources, indexedQuestionCount: indexed.data?.length ?? 0 };
-}
-
-const STOP_WORDS = new Set([
-  "about", "all", "and", "answer", "appeared", "can", "find", "from", "how", "many", "paper", "papers",
-  "question", "questions", "show", "the", "this", "what", "which", "with", "year", "physics", "chemistry",
-  "biology", "level", "please", "give", "tell", "me", "in", "of", "on", "for", "a", "an",
-]);
-
-function searchTerms(message: string) {
-  return [...new Set(message.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/))]
-    .filter((word) => word.length >= 3 && !STOP_WORDS.has(word) && !/^20\d{2}$/.test(word))
-    .sort((a, b) => b.length - a.length)
-    .slice(0, 5);
 }
 
 function getFilters(message: string, explicitYear?: number | null) {
@@ -113,12 +102,12 @@ function getFilters(message: string, explicitYear?: number | null) {
   const session = lower.includes("may/june") || lower.includes("may june") ? "MAY_JUNE"
     : lower.includes("oct/nov") || lower.includes("oct nov") ? "OCT_NOV"
       : lower.includes("feb/march") || lower.includes("feb march") ? "FEB_MAR" : null;
-  return { year, paperNumber, session, terms: searchTerms(message) };
+  return { year, paperNumber, session, terms: expandSearchTerms(message) };
 }
 
 async function retrieveSources(client: SupabaseClient, input: z.infer<typeof RequestBody>, subject: { id: number; name: string; code: string }) {
   const { year, paperNumber, session, terms } = getFilters(input.message, input.year);
-  const keyword = terms[0];
+  const searchTerms = terms.slice(0, 4);
 
   let papersQuery = client.from("papers")
     .select("id,title,year,session,paper_number,variant,source_type,raw_text,ingestion_status")
@@ -134,17 +123,24 @@ async function retrieveSources(client: SupabaseClient, input: z.infer<typeof Req
   if (year) questionsQuery = questionsQuery.eq("year", year);
   if (paperNumber) questionsQuery = questionsQuery.eq("papers.paper_number", paperNumber);
   if (session) questionsQuery = questionsQuery.eq("papers.session", session);
-  if (keyword) questionsQuery = questionsQuery.or(`topic.ilike.%${keyword}%,subtopic.ilike.%${keyword}%,question_text.ilike.%${keyword}%,question.ilike.%${keyword}%,extracted_text.ilike.%${keyword}%`);
+  if (searchTerms.length) questionsQuery = questionsQuery.or(searchTerms.flatMap((term) => [
+    `topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `question_text.ilike.%${term}%`,
+    `question.ilike.%${term}%`, `extracted_text.ilike.%${term}%`,
+  ]).join(","));
 
   let questionCountQuery = client.from("questions").select("id", { count: "exact", head: true }).eq("subject_id", subject.id);
   if (input.selectedPaperId) questionCountQuery = questionCountQuery.eq("paper_id", input.selectedPaperId);
   if (year) questionCountQuery = questionCountQuery.eq("year", year);
 
   let notesQuery = client.from("notes").select("id,title,topic,content,summary").eq("subject_id", subject.id);
-  if (keyword) notesQuery = notesQuery.or(`title.ilike.%${keyword}%,topic.ilike.%${keyword}%,content.ilike.%${keyword}%,summary.ilike.%${keyword}%`);
+  if (searchTerms.length) notesQuery = notesQuery.or(searchTerms.flatMap((term) => [
+    `title.ilike.%${term}%`, `topic.ilike.%${term}%`, `content.ilike.%${term}%`, `summary.ilike.%${term}%`,
+  ]).join(","));
 
   let topicsQuery = client.from("topics").select("id,name,slug").eq("subject_id", subject.id);
-  if (keyword) topicsQuery = topicsQuery.or(`name.ilike.%${keyword}%,slug.ilike.%${keyword}%`);
+  if (searchTerms.length) topicsQuery = topicsQuery.or(searchTerms.flatMap((term) => [
+    `name.ilike.%${term}%`, `slug.ilike.%${term}%`,
+  ]).join(","));
 
   const [papers, questions, topics, notes, questionCount] = await Promise.all([
     papersQuery.limit(20), questionsQuery.limit(200), topicsQuery.limit(30), notesQuery.limit(30), questionCountQuery,
@@ -154,18 +150,22 @@ async function retrieveSources(client: SupabaseClient, input: z.infer<typeof Req
   const results: SourceResult[] = [];
   for (const row of questions.data ?? []) {
     const paper = Array.isArray(row.papers) ? row.papers[0] : row.papers;
+    const metadata = { title: paper?.title, sourceFile: paper?.title, year: row.year, session: paper?.session, paperNumber: paper?.paper_number, variant: paper?.variant, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks };
     results.push({
       sourceType: "question", id: row.id, paperId: row.paper_id,
-      reference: `${subject.name} ${row.year ?? "unknown year"}, P${paper?.paper_number ?? "?"}, Q${row.question_number ?? "?"}`,
+      reference: formatCitation(subject, metadata),
       content: [row.question_text ?? row.question, row.extracted_text].filter(Boolean).join("\n").slice(0, 4000),
-      metadata: { topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks, session: paper?.session, variant: paper?.variant },
+      metadata,
     });
   }
   for (const row of notes.data ?? []) results.push({ sourceType: "note", id: row.id, paperId: null, reference: `${subject.name} note: ${row.title}`, content: [row.topic, row.summary, row.content].filter(Boolean).join("\n").slice(0, 4000), metadata: { topic: row.topic } });
   for (const row of topics.data ?? []) results.push({ sourceType: "topic", id: row.id, paperId: null, reference: `${subject.name} topic: ${row.name}`, content: row.name, metadata: { slug: row.slug } });
-  for (const row of papers.data ?? []) results.push({ sourceType: "paper", id: row.id, paperId: row.id, reference: `${subject.name} ${row.year} ${row.session} P${row.paper_number}${row.variant ? ` v${row.variant}` : ""}`, content: [row.title, row.raw_text].filter(Boolean).join("\n").slice(0, 4000), metadata: { year: row.year, session: row.session, paperNumber: row.paper_number, variant: row.variant, sourceType: row.source_type, ingestionStatus: row.ingestion_status, hasExtractedText: Boolean(row.raw_text) } });
+  for (const row of papers.data ?? []) {
+    const metadata = { title: row.title, sourceFile: row.title, year: row.year, session: row.session, paperNumber: row.paper_number, variant: row.variant, sourceType: row.source_type, ingestionStatus: row.ingestion_status, hasExtractedText: Boolean(row.raw_text) };
+    results.push({ sourceType: "paper", id: row.id, paperId: row.id, reference: formatCitation(subject, metadata), content: [row.title, row.raw_text].filter(Boolean).join("\n").slice(0, 4000), metadata });
+  }
 
-  return { sources: results.slice(0, 80), matchedPapers: papers.data ?? [], matchedQuestions: questions.data ?? [], extractedQuestionCount: questionCount.count ?? 0 };
+  return { sources: rankEvidence(results, terms, 12), matchedPapers: papers.data ?? [], matchedQuestions: questions.data ?? [], extractedQuestionCount: questionCount.count ?? 0 };
 }
 
 router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
@@ -199,25 +199,38 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     }
     if (retrieved.length === 0) { res.json({ answer: MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
 
-    const context = retrieved.map((source, index) => `[Source ${index + 1}] ${source.reference}\nMetadata: ${JSON.stringify(source.metadata)}\n${source.content}`).join("\n\n");
+    const context = retrieved.map((source, index) => `[S${index + 1}] ${source.reference}\nMetadata: ${JSON.stringify(source.metadata)}\n${source.content}`).join("\n\n");
+    const recentHistory = (input.chatHistory ?? []).slice(-8).map((message) => `${message.role === "user" ? "Student" : "Assistant"}: ${message.content}`).join("\n");
     let answer: string;
     try {
       answer = await generateAiAnswer(
-        `You are the Parhai.com ${subject.name} assistant for ${subject.level} ${subject.board}. Use only the supplied Supabase records. Never use outside knowledge, mix subjects, or invent paper data. Use Cambridge-style exam language when requested. Cite factual claims as [Source N]. If the records do not answer the question, reply exactly: ${MISSING_SOURCE_MESSAGE}`,
-        `Student question: ${input.message}\n\nSupabase records:\n${context}`
+        `You are the Parhai.com ${subject.name} assistant for ${subject.level} ${subject.board}.
+GROUNDING RULES:
+1. Use only the supplied Supabase evidence. Never add outside or general knowledge.
+2. Never mix subjects or invent paper facts, questions, marks, dates, or answers.
+3. Cite every factual paragraph with one or more valid evidence markers such as [S1].
+4. If the evidence is insufficient, reply exactly: ${MISSING_SOURCE_MESSAGE}
+FORMAT:
+- Start with a direct answer.
+- Use short paragraphs and bullet points for steps or lists.
+- Use Cambridge-style exam wording when requested.
+- Do not add a sources section; the platform renders verified citations separately.`,
+        `${recentHistory ? `Recent conversation (context only; it is not evidence):\n${recentHistory}\n\n` : ""}Student question: ${input.message}\n\nSupabase evidence:\n${context}`
       );
     } catch (providerError) {
       res.status(503).json({ error: providerError instanceof Error ? providerError.message : "AI provider request failed.", ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
       return;
     }
 
-    const sources = retrieved.map((source, index) => ({ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? null, questionNumber: source.sourceType === "question" ? source.reference.split("Q").pop() ?? null : null, reference: `[Source ${index + 1}] ${source.reference}` }));
-    const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: answer, sources }]);
+    const grounded = finalizeGroundedAnswer(answer, retrieved.length, MISSING_SOURCE_MESSAGE);
+    const cited = new Set(grounded.citedIndexes);
+    const sources = retrieved.flatMap((source, index) => cited.has(index + 1) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, questionNumber: source.metadata.questionNumber ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
+    const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: grounded.answer, sources }]);
     if (historyError) throw historyError;
-    const { error: logError } = await client.from("ai_chat_logs").insert({ user_id: res.locals.user.id, subject_id: subject.id, user_question: input.message, ai_answer: answer, sources_used: sources });
+    const { error: logError } = await client.from("ai_chat_logs").insert({ user_id: res.locals.user.id, subject_id: subject.id, user_question: input.message, ai_answer: grounded.answer, sources_used: sources });
     if (logError) req.log.warn({ logError }, "Could not save AI audit log");
 
-    res.json({ answer, sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
+    res.json({ answer: grounded.answer, sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
     req.log.error({ error }, "AI assistant request failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "AI assistant request failed." });

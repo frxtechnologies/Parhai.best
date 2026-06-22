@@ -277,15 +277,25 @@ function ChatBubble({ message }: { message: AiMessage }) {
           isUser ? "rounded-tr-none bg-[#0B1F3A] text-white" : "rounded-tl-none border bg-gray-50 text-[#0B1F3A]"
         }`}
       >
-        {message.content}
+        {isUser ? message.content : <FormattedAnswer content={message.content} />}
         {!isUser && message.sources && message.sources.length > 0 && (
           <div className="mt-3 border-t border-[#0B1F3A]/10 pt-2 text-xs text-gray-500">
-            {message.sources.slice(0, 4).map((source) => (
-              <div key={source.chunkId}>{source.reference}</div>
+            <div className="mb-1 font-semibold text-[#0B1F3A]">Verified sources</div>
+            {message.sources.slice(0, 8).map((source) => (
+              <div key={`${source.sourceType}-${source.chunkId}`} className="py-0.5">{source.reference}</div>
             ))}
           </div>
         )}
       </div>
     </div>
   );
+}
+
+function FormattedAnswer({ content }: { content: string }) {
+  return <div className="space-y-2">{content.split(/\n+/).filter(Boolean).map((line, index) => {
+    const value = line.trim();
+    if (/^[-•]\s+/.test(value)) return <div key={index} className="flex gap-2"><span aria-hidden>•</span><span>{value.replace(/^[-•]\s+/, "")}</span></div>;
+    if (/^(?:answer|explanation|steps?|key points?|exam-style answer):?$/i.test(value)) return <div key={index} className="font-bold text-[#0B1F3A]">{value.replace(/:$/, "")}</div>;
+    return <p key={index}>{value}</p>;
+  })}</div>;
 }

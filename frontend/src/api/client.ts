@@ -584,7 +584,7 @@ async function sendAiAssistantMessage(request: AiAssistantRequest): Promise<AiMe
       selectedPaperId: request.selectedPaperId ?? null,
       year: request.year ?? null,
       message: request.message,
-      chatHistory: request.chatHistory.map(({ role, content }) => ({ role, content })),
+      chatHistory: request.chatHistory.slice(-20).map(({ role, content }) => ({ role, content })),
     }),
   });
   const data = (await response.json()) as Partial<AiAssistantResponse> & { error?: string };

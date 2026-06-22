@@ -5,6 +5,7 @@ import {
   generateDocumentEmbeddings,
   AI_EMBEDDING_MODEL,
 } from "../lib/ai-service";
+import { canonicalTopic, fallbackTopicForSubject } from "./rag-utils";
 
 export type ProcessableResource = {
   id: number;
@@ -96,27 +97,6 @@ export function splitNumberedQuestions(text: string): IndexedQuestion[] {
       : { number: row.number, text: questionText, marks: readMarks(questionText) });
   }
   return [...unique.values()];
-}
-
-function fallbackTopic(text: string, subject: string) {
-  const value = text.toLowerCase();
-  const subjectName = subject.toLowerCase();
-  if (subjectName.includes("physics")) {
-    if (/lens|mirror|ray|refraction|reflection|light|optic/.test(value)) return "Light";
-    if (/current|voltage|resistance|circuit|charge|electric/.test(value)) return "Electricity";
-    if (/force|moment|pressure|mass|weight|momentum/.test(value)) return "Forces";
-    if (/wave|frequency|wavelength|sound/.test(value)) return "Waves";
-    if (/heat|temperature|thermal/.test(value)) return "Thermal Physics";
-    if (/magnet|induction|transformer/.test(value)) return "Magnetism";
-    if (/radioactive|radiation|atom|nucleus/.test(value)) return "Atomic Physics";
-    if (/speed|velocity|acceleration|distance|motion/.test(value)) return "Motion";
-    if (/energy|power|work/.test(value)) return "Energy";
-    return "General Physics";
-  }
-  if (subjectName.includes("chem")) return /organic|alkane|alcohol/.test(value) ? "Organic Chemistry" : /acid|base|salt/.test(value) ? "Acids, Bases and Salts" : "General Chemistry";
-  if (subjectName.includes("bio")) return /cell|membrane|mitosis/.test(value) ? "Cells" : /gene|inherit|dna/.test(value) ? "Genetics" : "General Biology";
-  if (subjectName.includes("math")) return /triangle|circle|angle|shape/.test(value) ? "Geometry" : /equation|factor|algebra/.test(value) ? "Algebra" : "General Mathematics";
-  return `General ${subject}`;
 }
 
 async function extractFileText(resource: ProcessableResource, buffer: Buffer) {
@@ -216,7 +196,7 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         paper_code: resource.paper_code,
         variant: resource.variant,
         question_number: question.number,
-        topic: tag?.topic ?? fallbackTopic(question.text, resource.subjects?.name ?? "Subject"),
+        topic: tag?.topic ? canonicalTopic(tag.topic) : fallbackTopicForSubject(question.text, resource.subjects?.name ?? "Subject"),
         subtopic: tag?.subtopic ?? null,
         difficulty: tag?.difficulty ?? "MEDIUM",
         marks: question.marks,

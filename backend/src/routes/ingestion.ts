@@ -7,6 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import pdf from "pdf-parse/lib/pdf-parse.js";
 import { parsePaperOneQuestions } from "../services/physics-paper-parser";
 import { classifyQuestions, isAiConfigured } from "../lib/ai-service";
+import { canonicalTopic, fallbackTopicForSubject } from "../services/rag-utils";
 
 const router: IRouter = Router();
 const upload = multer({
@@ -89,12 +90,12 @@ router.post("/papers/:paperId/process", requireAdmin, async (req, res): Promise<
         classificationWarning = classificationError instanceof Error ? classificationError.message : "AI classification failed.";
       }
     } else {
-      classificationWarning = "GEMINI_API_KEY is not configured; questions were saved as Unclassified.";
+      classificationWarning = "AI provider is not configured; deterministic subject topic tagging was used.";
     }
     await client.from("questions").delete().eq("paper_id", paperId);
     const { data: saved, error: saveError } = await client.from("questions").insert(questions.map(q => {
       const detected = topics.get(q.number);
-      return { paper_id: paperId, subject_id: paper.subject_id, question_number: q.number, question: q.text, extracted_text: q.text, marks: q.marks, topic: detected?.topic ?? "Unclassified", subtopic: detected?.subtopic ?? null, difficulty: detected?.difficulty ?? "MEDIUM", answer: null, marking_points: [], year: paper.year, ai_summary: detected?.summary ?? null };
+      return { paper_id: paperId, subject_id: paper.subject_id, question_number: q.number, question: q.text, extracted_text: q.text, marks: q.marks, topic: detected?.topic ? canonicalTopic(detected.topic) : fallbackTopicForSubject(q.text, subject?.name ?? subject?.code ?? "Subject"), subtopic: detected?.subtopic ?? null, difficulty: detected?.difficulty ?? "MEDIUM", answer: null, marking_points: [], year: paper.year, ai_summary: detected?.summary ?? null };
     })).select("id,question_number,topic,subtopic,difficulty,question,question_text,marks");
     if (saveError) throw saveError;
     const topicNames = [...new Set((saved ?? []).map((question) => question.topic).filter((name) => name && name !== "Unclassified"))];
@@ -105,7 +106,7 @@ router.post("/papers/:paperId/process", requireAdmin, async (req, res): Promise<
       ).select("id,name");
       if (topicError) throw topicError;
       const topicIds = new Map((savedTopics ?? []).map((topic) => [topic.name, topic.id]));
-      const links = (saved ?? []).flatMap((question) => topicIds.has(question.topic) ? [{ question_id: question.id, topic_id: topicIds.get(question.topic), confidence: 1, source: "gemini" }] : []);
+      const links = (saved ?? []).flatMap((question) => topicIds.has(question.topic) ? [{ question_id: question.id, topic_id: topicIds.get(question.topic), confidence: 1, source: isAiConfigured() ? "ai" : "fallback" }] : []);
       if (links.length) {
         const { error: linkError } = await client.from("question_topics").upsert(links, { onConflict: "question_id,topic_id" });
         if (linkError) throw linkError;
