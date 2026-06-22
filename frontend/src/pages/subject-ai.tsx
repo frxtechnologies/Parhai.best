@@ -83,6 +83,7 @@ export default function SubjectAi() {
         subjectId: subject.id,
         subjectName: subject.name,
         subjectCode: subject.code,
+        board: subject.board,
         selectedPaperId: selectedPaper?.id ?? null,
         year: selectedPaper?.year ?? null,
         session: selectedPaper?.session ?? null,
@@ -224,6 +225,7 @@ export default function SubjectAi() {
                 <p>Level: {subject.level === "O_LEVEL" ? "O Level" : "A Level"}</p>
                 <p>Subject: {subject.name}</p>
                 <p>Code: {subject.code}</p>
+                <p>Board: {subject.board}</p>
                 <p>Paper filter: {selectedPaper ? `${selectedPaper.year} P${selectedPaper.paperNumber}` : "All subject papers"}</p>
               </div>
             </div>

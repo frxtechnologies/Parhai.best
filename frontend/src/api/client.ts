@@ -28,6 +28,15 @@ export const API_BASE_URL = import.meta.env.PROD && /^https?:\/\/(localhost|127\
   ? ""
   : configuredApiUrl;
 
+export function requestResourceProcessing(resourceId: number, accessToken: string) {
+  const useNetlifyBackground = import.meta.env.PROD && !configuredApiUrl;
+  return fetch(useNetlifyBackground ? "/.netlify/functions/process-resource-background" : `${API_BASE_URL}/api/resources/${resourceId}/process`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: useNetlifyBackground ? JSON.stringify({ resourceId }) : undefined,
+  });
+}
+
 type Level = "O_LEVEL" | "A_LEVEL";
 type PaperSession = "MAY_JUNE" | "OCT_NOV" | "FEB_MAR";
 type PaperType = "PAST_PAPER" | "MARKING_SCHEME";
@@ -38,6 +47,7 @@ type SubjectRow = {
   name: string;
   code: string;
   level: Level;
+  board: string;
   description: string | null;
   color: string | null;
   icon: string | null;
@@ -170,6 +180,7 @@ function mapSubject(row: SubjectRow, counts?: { papers?: number; notes?: number;
     name: row.name,
     code: row.code,
     level: row.level,
+    board: row.board,
     description: row.description ?? "",
     color: row.color ?? "#0B1F3A",
     icon: row.icon ?? "book",
@@ -251,7 +262,7 @@ async function countBySubject(table: string, subjectIds: number[], resourceType?
 async function listSubjects(params?: ListSubjectsParams): Promise<Subject[]> {
   if (!isSupabaseConfigured) return [];
   const client = requireSupabase();
-  let query = client.from("subjects").select("id,name,code,level,description,color,icon").order("name");
+  let query = client.from("subjects").select("id,name,code,level,board,description,color,icon").order("name");
   if (params?.level) query = query.eq("level", params.level);
   const { data, error } = await query;
   if (error) throw error;
@@ -374,7 +385,7 @@ async function uploadPdfDirect(input: DirectPdfUploadInput): Promise<DirectPdfUp
       }).select("id").single();
       if (error || !data) throw error ?? new Error("Could not save paper metadata.");
       await client.from("uploads").insert({ user_id: authData.user.id, subject_id: input.subjectId, paper_id: data.id, source_type: input.resourceType === "EXAMINER_REPORT" ? "EXAMINER_REPORT" : "QUESTION_PAPER", bucket, storage_path: path, original_filename: input.file.name, file_type: input.file.type || "application/pdf", file_size_bytes: input.file.size, status: "uploaded" });
-      void client.auth.getSession().then(({ data: sessionData }) => fetch(`${API_BASE_URL}/api/resources/${resourceId}/process`, { method: "POST", headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ""}` } })).catch(() => undefined);
+      void client.auth.getSession().then(({ data: sessionData }) => requestResourceProcessing(resourceId!, sessionData.session?.access_token ?? "")).catch(() => undefined);
       return { bucket, path, metadataId: Number(data.id) };
     }
 
@@ -390,7 +401,7 @@ async function uploadPdfDirect(input: DirectPdfUploadInput): Promise<DirectPdfUp
       }, { onConflict: "paper_id" }).select("id").single();
       if (error || !data) throw error ?? new Error("Could not save marking-scheme metadata.");
       await client.from("uploads").insert({ user_id: authData.user.id, subject_id: input.subjectId, paper_id: input.relatedPaperId, source_type: "MARK_SCHEME", bucket, storage_path: path, original_filename: input.file.name, file_type: input.file.type || "application/pdf", file_size_bytes: input.file.size, status: "uploaded" });
-      void client.auth.getSession().then(({ data: sessionData }) => fetch(`${API_BASE_URL}/api/resources/${resourceId}/process`, { method: "POST", headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ""}` } })).catch(() => undefined);
+      void client.auth.getSession().then(({ data: sessionData }) => requestResourceProcessing(resourceId!, sessionData.session?.access_token ?? "")).catch(() => undefined);
       return { bucket, path, metadataId: Number(data.id) };
     }
 
@@ -406,7 +417,7 @@ async function uploadPdfDirect(input: DirectPdfUploadInput): Promise<DirectPdfUp
     }).select("id").single();
     if (error || !data) throw error ?? new Error("Could not save note metadata.");
     await client.from("uploads").insert({ user_id: authData.user.id, subject_id: input.subjectId, source_type: "NOTE", bucket, storage_path: path, original_filename: input.file.name, file_type: input.file.type || "application/pdf", file_size_bytes: input.file.size, status: "uploaded" });
-    void client.auth.getSession().then(({ data: sessionData }) => fetch(`${API_BASE_URL}/api/resources/${resourceId}/process`, { method: "POST", headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ""}` } })).catch(() => undefined);
+    void client.auth.getSession().then(({ data: sessionData }) => requestResourceProcessing(resourceId!, sessionData.session?.access_token ?? "")).catch(() => undefined);
     return { bucket, path, metadataId: Number(data.id) };
   } catch (error) {
     if (resourceId !== null) await client.from("resources").delete().eq("id", resourceId);
@@ -568,6 +579,8 @@ async function sendAiAssistantMessage(request: AiAssistantRequest): Promise<AiMe
     body: JSON.stringify({
       level: request.level,
       subjectId: request.subjectId,
+      subjectName: request.subjectName,
+      board: request.board,
       selectedPaperId: request.selectedPaperId ?? null,
       year: request.year ?? null,
       message: request.message,

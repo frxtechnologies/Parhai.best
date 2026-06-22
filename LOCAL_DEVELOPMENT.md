@@ -8,7 +8,7 @@ This guide is for developers using VS Code, Cursor, Replit, Codex, or another st
 - Node.js 20 or newer
 - npm
 - Access to a Supabase project
-- A Gemini API key for classification and grounded answers
+- A server-side key for the selected AI provider (xAI, Gemini, OpenAI, Groq, or OpenRouter)
 - Optional: Supabase CLI
 
 Verify tools:
@@ -275,11 +275,11 @@ Cause: no matching `document_chunks` rows or filters do not match the paper.
 
 Fix: verify subject, level, year, paper ID, and ingestion status.
 
-### Assistant reports OpenAI is not configured
+### Assistant reports the AI provider is not configured
 
-Cause: sources were found but `OPENAI_API_KEY` is absent from the backend.
+Cause: `AI_PROVIDER` is invalid or the selected provider's key is absent from the backend.
 
-Fix: add the key server-side and restart the API.
+Fix: add `AI_PROVIDER` and its matching server-only key, restart the API, then use `/admin/ai-testing`.
 
 ### CORS blocks requests
 

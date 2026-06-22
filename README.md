@@ -11,7 +11,7 @@ This standalone repository is the Parhai.com project source of truth. It is desi
 - Selected subjects drive the student dashboard.
 - The admin upload flow is active for the first controlled ingestion test.
 - Admins can upload and process question papers directly through Supabase Storage.
-- Gemini classifies extracted questions and answers only from retrieved Supabase records.
+- A provider-flexible server AI layer supports xAI, Gemini, OpenAI, Groq, and OpenRouter.
 - Uploaded source content is private and retrieved through authenticated flows.
 - Image-only PDF OCR remains a future integration; basic upload and AI processing do not use n8n.
 
@@ -45,7 +45,7 @@ GitHub repository: `frxtechnologies/Parhai.best`.
 - `pdf-parse` text extraction
 - Pino structured logging
 - Supabase service-side client
-- OpenAI chat completions and embeddings through HTTPS
+- Provider-selected AI chat/classification plus 768-dimensional retrieval embeddings
 
 ### Data And Infrastructure
 
@@ -71,7 +71,7 @@ GitHub repository: `frxtechnologies/Parhai.best`.
 |       `-- pages/            Route-level screens
 |-- backend/                  Active Express API and legacy scaffolding
 |   `-- src/
-|       |-- lib/              Supabase, OpenAI, and logging clients
+|       |-- lib/              Supabase, provider-flexible AI, and logging clients
 |       |-- middleware/       Supabase user/admin authorization
 |       |-- routes/           Active and legacy route modules
 |       `-- services/         PDF parsing and ingestion logic
@@ -108,7 +108,7 @@ The private Supabase Storage bucket is `resources`. Signed-in students can read 
 1. An administrator opens `/admin/resources`, selects a subject and resource type, enters optional exam metadata, and uploads a PDF or text file.
 2. The browser uploads the file directly to the private `resources` bucket and inserts its metadata into `resources`.
 3. The authenticated backend downloads the stored file, extracts real text, splits it into overlapping chunks, and saves them in `ai_chunks`.
-4. The subject AI assistant searches only chunks for the selected subject. Only relevant chunks are sent to Gemini.
+4. The subject AI assistant searches only approved chunks and indexed questions for the selected subject. Only relevant evidence is sent to the active server-side AI provider.
 5. Answers cite the stored resource title, year, and paper code. If matching chunks do not exist, the assistant returns the missing-source response instead of inventing an answer.
 
 Text-based PDFs and plain-text files are processed directly. Image-only scans require an OCR extension before they can produce AI chunks.
@@ -224,7 +224,7 @@ See [SUPABASE_SETUP.md](SUPABASE_SETUP.md) for the full table catalog, migration
 1. The frontend sends the Supabase access token and a subject-scoped question to `POST /api/ai-assistant`.
 2. The API validates the token and request.
 3. The API finds exact question-number matches when possible.
-4. It generates a query embedding when OpenAI is configured.
+4. It generates a query embedding through the central AI service.
 5. It calls `match_document_chunks` for semantic retrieval.
 6. It falls back to `search_document_chunks` for keyword retrieval.
 7. If no sources exist, it returns the fixed missing-paper message without inventing content.
@@ -244,7 +244,7 @@ See [AI_ASSISTANT_GUIDE.md](AI_ASSISTANT_GUIDE.md) for request/response examples
 7. Questions and answers are linked by question number.
 8. Topics are classified by AI when configured, with a keyword fallback.
 9. Question and marking-scheme chunks are created.
-10. Embeddings are generated when OpenAI is configured.
+10. Embeddings are generated through the central AI service.
 11. The paper is marked `ready` or `ready_without_embeddings`.
 12. Ready papers immediately appear in the matching subject queries and become retrievable by the assistant.
 
@@ -272,6 +272,14 @@ npm run typecheck:backend
 npm run build:backend
 npm --prefix backend test
 ```
+
+## Subject-aware automatic RAG
+
+The canonical pipeline is `resources` → `processing_jobs` → PDF extraction → `question_index` + `ai_chunks`. Past papers, worksheets, tests, and topicals are split into numbered questions and tagged with topic, subtopic, difficulty, and marks. Matching marking schemes update `answer_text` by subject, level, board, year, session, paper code, variant, and question number. Scanned PDFs fail clearly with an OCR-required status.
+
+Student AI requests include the selected subject, level, and board. Server retrieval enforces the real `subject_id` and `is_approved` resource boundary before invoking the selected provider. Citations contain source file, year, session, paper code, variant, and question number. Admins can inspect and retry jobs at `/admin/processing` and test provider configuration at `/admin/ai-testing`.
+
+AI configuration is server-only. Set `AI_PROVIDER` to `xai`, `gemini`, `openai`, `groq`, or `openrouter` and add the matching key (`XAI_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, or `OPENROUTER_API_KEY`). See `AI_SETUP.md`.
 
 ## Deployment
 
@@ -327,7 +335,7 @@ Open pull requests into `main`. Pull remote changes before continuing in a diffe
 | Upload returns `422` | PDF text did not match the controlled parser | Confirm both PDFs are text-based Physics 5054 Paper 1 files and select the correct session/variant |
 | Paper upload succeeds but is not listed | Ingestion status is not ready | Inspect API logs and the `papers.ingestion_status` value |
 | Assistant says the paper is missing | No matching chunks exist | Complete ingestion and verify `document_chunks` rows for the paper |
-| Assistant returns `503` | Sources exist but OpenAI is not configured | Add `OPENAI_API_KEY` to the backend environment |
+| Assistant returns `503` | Active AI provider is missing or unavailable | Check `AI_PROVIDER` and its server-side API key, then use `/admin/ai-testing` |
 | CORS error | Frontend origin is not allowed | Set backend `CORS_ORIGIN` to the exact frontend origin |
 | Direct deployed route returns 404 | Static host lacks SPA fallback | Rewrite all frontend routes to `/index.html` |
 | Vite changes are ignored | Environment values are loaded at startup | Restart the frontend dev server |

@@ -20,7 +20,7 @@ export default function AiTutor() {
           </div>
           <h1 className="text-3xl font-bold text-[#0B1F3A]">Choose a subject assistant</h1>
           <p className="mt-2 max-w-2xl text-gray-500">
-            Each assistant searches the matching Supabase papers, questions, topics, and notes, then asks Gemini to answer only from those records.
+            Each assistant searches matching Supabase papers, questions, topics, and notes, then asks the configured server-side AI provider to answer only from those records.
           </p>
         </header>
 

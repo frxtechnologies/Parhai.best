@@ -52,7 +52,7 @@ export default function Admin() {
       const response = await fetch(`${API_BASE_URL}/api/papers/${paperId}/process`, { method: "POST", headers: { Authorization: `Bearer ${data.session?.access_token}` } });
       const body = await response.json() as { extracted?: number; aiClassified?: number; classificationWarning?: string | null; error?: string };
       if (!response.ok) throw new Error(body.error ?? "Paper processing failed.");
-      setMessage(`Processing complete: ${body.extracted ?? 0} real questions extracted and ${body.aiClassified ?? 0} classified by Gemini.${body.classificationWarning ? ` Classification warning: ${body.classificationWarning}` : ""}`);
+      setMessage(`Processing complete: ${body.extracted ?? 0} real questions extracted and ${body.aiClassified ?? 0} classified by the active AI provider.${body.classificationWarning ? ` Classification warning: ${body.classificationWarning}` : ""}`);
       await loadProcessingPapers();
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : "Paper processing failed."); }
     finally { setProcessingId(null); }
@@ -201,7 +201,7 @@ export default function Admin() {
         </section>
 
         <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-          <div className="border-b p-6"><h2 className="text-xl font-bold text-[#0B1F3A]">Process uploaded papers</h2><p className="mt-1 text-sm text-gray-500">Extract real PDF text, split questions, classify topics with Gemini, and save linked question rows.</p></div>
+          <div className="border-b p-6"><h2 className="text-xl font-bold text-[#0B1F3A]">Process uploaded papers</h2><p className="mt-1 text-sm text-gray-500">Extract real PDF text, split questions, classify topics with the active AI provider, and save linked question rows.</p></div>
           <div className="divide-y">{processingPapers.map((paper) => { const count = paper.questions?.[0]?.count ?? 0; return <div key={paper.id} data-paper-id={paper.id} className="grid gap-3 p-5 md:grid-cols-[1fr_160px_150px] md:items-center"><div><p className="font-semibold text-[#0B1F3A]">{paper.title}</p><p className="text-sm text-gray-500">{paper.year} {paper.session.replace("_", " ")} · P{paper.paper_number}{paper.variant ? ` v${paper.variant}` : ""}</p>{paper.processing_error&&<p className="mt-1 text-xs text-red-600">{paper.processing_error}</p>}</div><div className="text-sm"><p>{count} questions</p><p className="text-gray-500">{paper.raw_text ? "Text extracted" : "No extracted text"}</p></div><button data-testid={`process-paper-${paper.id}`} onClick={()=>processPaper(paper.id)} disabled={processingId===paper.id} className="rounded-xl bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{processingId===paper.id ? "Processing…" : count ? "Reprocess Paper" : "Process Paper"}</button></div>})}{!processingPapers.length&&<p className="p-8 text-center text-sm text-gray-500">No question papers uploaded.</p>}</div>
         </section>
       </div>

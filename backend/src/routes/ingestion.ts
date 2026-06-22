@@ -6,7 +6,7 @@ import { ingestPhysics2024PaperOne } from "../services/physics-ingestion";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import pdf from "pdf-parse/lib/pdf-parse.js";
 import { parsePaperOneQuestions } from "../services/physics-paper-parser";
-import { classifyExamQuestions, isGeminiConfigured } from "../lib/gemini";
+import { classifyQuestions, isAiConfigured } from "../lib/ai-service";
 
 const router: IRouter = Router();
 const upload = multer({
@@ -82,11 +82,11 @@ router.post("/papers/:paperId/process", requireAdmin, async (req, res): Promise<
     const subject = Array.isArray(paper.subjects) ? paper.subjects[0] : paper.subjects;
     let classificationWarning: string | null = null;
     let topics = new Map();
-    if (isGeminiConfigured()) {
+    if (isAiConfigured()) {
       try {
-        topics = await classifyExamQuestions(subject?.name ?? subject?.code ?? "the subject", questions.map(q => ({ number: q.number, text: q.text })));
+        topics = await classifyQuestions(subject?.name ?? subject?.code ?? "the subject", questions.map(q => ({ number: q.number, text: q.text })));
       } catch (classificationError) {
-        classificationWarning = classificationError instanceof Error ? classificationError.message : "Gemini classification failed.";
+        classificationWarning = classificationError instanceof Error ? classificationError.message : "AI classification failed.";
       }
     } else {
       classificationWarning = "GEMINI_API_KEY is not configured; questions were saved as Unclassified.";

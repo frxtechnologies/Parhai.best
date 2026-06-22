@@ -15,6 +15,7 @@ import {
   Menu,
   ShieldCheck,
   FlaskConical,
+  RefreshCw,
 } from "lucide-react";
 
 function cn(...classes: (string | boolean | undefined)[]) {
@@ -34,6 +35,7 @@ const NAV_ITEMS = [
 const ADMIN_ITEMS = [
   { label: "Admin Panel", href: "/admin", icon: ShieldCheck },
   { label: "Subjects & Resources", href: "/admin/resources", icon: BookOpen },
+  { label: "Processing Jobs", href: "/admin/processing", icon: RefreshCw },
   { label: "Pipeline Testing", href: "/admin/testing", icon: FlaskConical },
   { label: "AI Testing", href: "/admin/ai-testing", icon: Bot },
   { label: "Paper Analytics", href: "/analytics/papers", icon: LineChart },

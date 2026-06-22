@@ -1,35 +1,42 @@
-# Parhai Gemini assistant setup
+# Parhai AI provider setup
 
-The AI assistant searches authenticated Supabase records in `papers`, `questions`, `topics`, and `notes`. Only the retrieved records are sent to Gemini. The Gemini key is read by the backend and is never included in frontend code.
+Parhai uses one server-side service in `backend/src/lib/ai-service.ts` for chat, classification, topic tagging, and embeddings. Frontend code never receives provider keys.
+
+## Select a provider
+
+Set `AI_PROVIDER` to one of `xai`, `gemini`, `openai`, `groq`, or `openrouter`, then add only that provider's key. Changing providers requires an environment change and redeploy, not a code change.
+
+```env
+AI_PROVIDER=xai
+XAI_API_KEY=your-secret-key
+XAI_MODEL=grok-3-mini
+```
+
+Other supported keys are `GEMINI_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, and `OPENROUTER_API_KEY`. Optional model variables are listed in `.env.example`.
+
+For xAI, OpenAI-compatible chat is sent from the backend to `https://api.x.ai/v1`. Gemini uses its native server API. OpenAI uses native embeddings; Gemini uses native embeddings. xAI, Groq, and OpenRouter use a deterministic 768-dimensional local retrieval vector so processing remains available even when the selected chat provider does not expose a compatible embedding model.
 
 ## Local setup
 
-1. Create a Gemini API key in Google AI Studio.
-2. Add it to `backend/.env`:
-
-   ```env
-   GEMINI_API_KEY=your_key_here
-   GEMINI_MODEL=gemini-2.5-flash-lite
-   ```
-
-3. Keep `SUPABASE_URL` and `SUPABASE_ANON_KEY` configured in `backend/.env`. `SUPABASE_SERVICE_ROLE_KEY` is optional for this route because it uses the signed-in student's JWT and Supabase RLS.
-4. Restart the backend with `npm run dev` from `backend`.
-
-Never add `GEMINI_API_KEY` to a `VITE_`, `NEXT_PUBLIC_`, or other browser-exposed variable.
+Add the variables to `backend/.env`, restart `npm run dev`, sign in as the content administrator, and open `/admin/ai-testing`. The page displays provider, model, whether a key was detected, connection state, and a test response. It never displays the key.
 
 ## Netlify
 
-In the Netlify site, open **Site configuration → Environment variables**, add `GEMINI_API_KEY` (and optionally `GEMINI_MODEL`), scope it to the server function/backend runtime, and redeploy. If the Express backend is hosted separately, add the variable on that backend host instead—Netlify frontend variables cannot configure another server.
+In Site configuration → Environment variables, add:
 
-## Vercel
+- `AI_PROVIDER`
+- the selected provider key, such as `XAI_API_KEY`
+- the optional selected model, such as `XAI_MODEL`
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` when server-side privileged processing is enabled
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
 
-Open **Project Settings → Environment Variables**, add `GEMINI_API_KEY` for Production/Preview/Development as needed, then redeploy the backend project. Do not prefix the key with `NEXT_PUBLIC_`.
+Redeploy after changing environment variables. Never create a `VITE_` provider key because Vite exposes those values to browsers.
 
-## Test
+## Automatic RAG pipeline
 
-1. Sign in to Parhai and ensure a real paper has been processed into `questions`.
-2. Open `/admin/ai-testing`.
-3. Select Physics and ask: `How many Light questions appeared in Physics 2024?`
-4. Confirm that **Supabase results used** shows real matching rows and that the final answer cites them.
+An admin upload creates a private Storage object, a `resources` row, and a `processing_jobs` row. The secure processing endpoint extracts text, creates `ai_chunks`, splits question-like resources into `question_index`, tags questions through the active provider, and links marking-scheme answers. Student retrieval is restricted by `subject_id` and approved resources. Answers and citations are logged in `ai_chat_logs` for the signed-in user.
 
-If no matching rows exist, the API returns `I could not find this in the uploaded papers yet.` If the key is absent, it returns `AI assistant is not configured yet. Please add GEMINI_API_KEY.`
+Scanned PDFs return an explicit OCR-required error. Provider errors distinguish missing or invalid keys, rate limits, unavailable providers, and unavailable models.

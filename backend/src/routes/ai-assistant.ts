@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { generateGroundedAnswer, generateQueryEmbedding, GEMINI_NOT_CONFIGURED, isGeminiConfigured } from "../lib/gemini";
+import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 
@@ -12,7 +12,9 @@ const UNPROCESSED_PAPER_MESSAGE = "This paper is uploaded but not processed yet.
 const RequestBody = z.object({
   message: z.string().trim().min(1).max(4000),
   subjectId: z.coerce.number().int().positive(),
+  subjectName: z.string().trim().min(1).max(120).optional(),
   level: z.enum(["O_LEVEL", "A_LEVEL"]),
+  board: z.string().trim().min(1).max(80).optional(),
   selectedPaperId: z.coerce.number().int().positive().nullable().optional(),
   year: z.coerce.number().int().min(1990).max(2100).nullable().optional(),
   chatHistory: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(4000) })).max(20).optional(),
@@ -32,12 +34,12 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   const { year, terms } = getFilters(input.message, input.year);
   let resourcesQuery = client.from("resources")
     .select("id,title,resource_type,year,session,paper_code,variant,processing_status")
-    .eq("subject_id", subject.id);
+    .eq("subject_id", subject.id).eq("is_approved", true);
   if (year) resourcesQuery = resourcesQuery.eq("year", year);
 
   let chunksQuery = client.from("ai_chunks")
-    .select("id,resource_id,chunk_index,content,metadata,resources!inner(id,title,resource_type,year,session,paper_code,variant,processing_status)")
-    .eq("subject_id", subject.id);
+    .select("id,resource_id,chunk_index,content,metadata,resources!inner(id,title,resource_type,year,session,paper_code,variant,processing_status,is_approved)")
+    .eq("subject_id", subject.id).eq("resources.is_approved", true);
   if (year) chunksQuery = chunksQuery.eq("resources.year", year);
   if (terms.length) chunksQuery = chunksQuery.or(terms.slice(0, 3).map((term) => `content.ilike.%${term}%`).join(","));
 
@@ -48,10 +50,16 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     match_count: 12,
     match_threshold: 0.25,
   });
-  const [resources, chunks, semantic] = await Promise.all([resourcesQuery.order("year", { ascending: false }).limit(100), chunksQuery.limit(20), semanticQuery]);
+  let indexedQuery = client.from("question_index")
+    .select("id,resource_id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,source_file,year,session,paper_code,variant,resources!inner(title,is_approved)")
+    .eq("subject_id", subject.id).eq("resources.is_approved", true);
+  if (year) indexedQuery = indexedQuery.eq("year", year);
+  if (terms.length) indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `question_text.ilike.%${term}%`, `answer_text.ilike.%${term}%`]).join(","));
+  const [resources, chunks, semantic, indexed] = await Promise.all([resourcesQuery.order("year", { ascending: false }).limit(100), chunksQuery.limit(20), semanticQuery, indexedQuery.limit(100)]);
   if (resources.error) throw resources.error;
   if (chunks.error) throw chunks.error;
   if (semantic.error) throw semantic.error;
+  if (indexed.error) throw indexed.error;
   const keywordSources: SourceResult[] = (chunks.data ?? []).map((chunk) => {
     const resource = Array.isArray(chunk.resources) ? chunk.resources[0] : chunk.resources;
     const reference = `${subject.name}: ${resource?.title ?? "Resource"}${resource?.year ? ` (${resource.year})` : ""}${resource?.paper_code ? ` ${resource.paper_code}` : ""}`;
@@ -67,9 +75,22 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     content: chunk.content.slice(0, 5000),
     metadata: { ...chunk.metadata, resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, similarity: chunk.similarity },
     }));
-  const seen = new Set<number>();
-  const sources = [...semanticSources, ...keywordSources].filter((source) => !seen.has(source.id) && seen.add(source.id)).slice(0, 20);
-  return { resources: resources.data ?? [], sources };
+  const questionSources: SourceResult[] = (indexed.data ?? []).map((row) => ({
+    sourceType: "question",
+    id: row.id,
+    paperId: null,
+    reference: `${subject.name} ${row.paper_code ?? "paper"} ${row.session ?? ""} ${row.year ?? ""}${row.variant ? ` Variant ${row.variant}` : ""}, Question ${row.question_number}`.replace(/\s+/g, " ").trim(),
+    content: `Question: ${row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
+    metadata: { resourceId: row.resource_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
+  }));
+  const seen = new Set<string>();
+  const sources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
+    const key = `${source.sourceType}:${source.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 30);
+  return { resources: resources.data ?? [], sources, indexedQuestionCount: indexed.data?.length ?? 0 };
 }
 
 const STOP_WORDS = new Set([
@@ -151,20 +172,22 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
   try {
     const parsed = RequestBody.safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid AI request." }); return; }
-    if (!isGeminiConfigured()) { res.status(503).json({ error: GEMINI_NOT_CONFIGURED }); return; }
+    if (!isAiConfigured()) { res.status(503).json({ error: getAiConfigurationError() }); return; }
 
     const token = req.header("authorization")?.replace(/^Bearer\s+/i, "");
     const client = createUserClient(token!);
     const input = parsed.data;
-    const { data: subject, error: subjectError } = await client.from("subjects").select("id,name,code,level").eq("id", input.subjectId).eq("level", input.level).single();
+    const { data: subject, error: subjectError } = await client.from("subjects").select("id,name,code,level,board").eq("id", input.subjectId).eq("level", input.level).single();
     if (subjectError || !subject) { res.status(404).json({ error: "Subject not found." }); return; }
+    if (input.subjectName && input.subjectName.toLowerCase() !== subject.name.toLowerCase()) { res.status(400).json({ error: "Subject scope does not match the selected subject." }); return; }
+    if (input.board && input.board.toLowerCase() !== subject.board.toLowerCase()) { res.status(400).json({ error: "Board scope does not match the selected subject." }); return; }
 
     const resourceRetrieval = await retrieveResourceSources(client, input, subject);
     let diagnostics: Record<string, unknown>;
     let retrieved: SourceResult[];
     if (resourceRetrieval.resources.length) {
       const unprocessed = resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
-      diagnostics = { matchedResources: resourceRetrieval.resources, matchedChunks: resourceRetrieval.sources.length };
+      diagnostics = { matchedResources: resourceRetrieval.resources, matchedChunks: resourceRetrieval.sources.length, indexedQuestions: resourceRetrieval.indexedQuestionCount };
       if (unprocessed) { res.json({ answer: "This resource is uploaded but not processed yet. Please process it first.", sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
       retrieved = resourceRetrieval.sources;
     } else {
@@ -179,22 +202,24 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     const context = retrieved.map((source, index) => `[Source ${index + 1}] ${source.reference}\nMetadata: ${JSON.stringify(source.metadata)}\n${source.content}`).join("\n\n");
     let answer: string;
     try {
-      answer = await generateGroundedAnswer(
-        `You are the Parhai.com ${subject.name} assistant. Use only the supplied Supabase records. Never use outside knowledge or invent paper data. Cite factual claims as [Source N]. If the records do not answer the question, reply exactly: ${MISSING_SOURCE_MESSAGE}`,
+      answer = await generateAiAnswer(
+        `You are the Parhai.com ${subject.name} assistant for ${subject.level} ${subject.board}. Use only the supplied Supabase records. Never use outside knowledge, mix subjects, or invent paper data. Use Cambridge-style exam language when requested. Cite factual claims as [Source N]. If the records do not answer the question, reply exactly: ${MISSING_SOURCE_MESSAGE}`,
         `Student question: ${input.message}\n\nSupabase records:\n${context}`
       );
-    } catch (geminiError) {
-      res.status(503).json({ error: geminiError instanceof Error ? geminiError.message : "Gemini request failed.", ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
+    } catch (providerError) {
+      res.status(503).json({ error: providerError instanceof Error ? providerError.message : "AI provider request failed.", ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
       return;
     }
 
     const sources = retrieved.map((source, index) => ({ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? null, questionNumber: source.sourceType === "question" ? source.reference.split("Q").pop() ?? null : null, reference: `[Source ${index + 1}] ${source.reference}` }));
     const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: answer, sources }]);
     if (historyError) throw historyError;
+    const { error: logError } = await client.from("ai_chat_logs").insert({ user_id: res.locals.user.id, subject_id: subject.id, user_question: input.message, ai_answer: answer, sources_used: sources });
+    if (logError) req.log.warn({ logError }, "Could not save AI audit log");
 
     res.json({ answer, sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
-    req.log.error({ error }, "Gemini assistant request failed");
+    req.log.error({ error }, "AI assistant request failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "AI assistant request failed." });
   }
 });

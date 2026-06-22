@@ -1,5 +1,5 @@
 import pdf from "pdf-parse/lib/pdf-parse.js";
-import { createEmbeddings, detectPhysicsTopics, isOpenAiConfigured } from "../lib/openai";
+import { classifyQuestions, generateDocumentEmbeddings, isAiConfigured } from "../lib/ai-service";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   detectPhysicsPaperMetadata,
@@ -140,7 +140,10 @@ export async function ingestPhysics2024PaperOne(input: IngestInput) {
   const { error: clearQuestionsError } = await supabaseAdmin.from("questions").delete().eq("paper_id", paper.id);
   if (clearQuestionsError) throw clearQuestionsError;
 
-  const aiTopics = await detectPhysicsTopics(questions.map((question) => ({ number: question.number, text: question.text })));
+  const classifications = isAiConfigured()
+    ? await classifyQuestions("Cambridge O-Level Physics 5054", questions.map((question) => ({ number: question.number, text: question.text })))
+    : new Map();
+  const aiTopics = new Map([...classifications].map(([number, classification]) => [number, [{ name: classification.topic, confidence: 0.9 }]]));
   const { data: insertedQuestions, error: questionError } = await supabaseAdmin
     .from("questions")
     .insert(
@@ -228,7 +231,7 @@ export async function ingestPhysics2024PaperOne(input: IngestInput) {
     return markingChunk ? [questionChunk, markingChunk] : [questionChunk];
   });
 
-  const embeddings = isOpenAiConfigured() ? await createEmbeddings(chunks.map((chunk) => chunk.content)) : [];
+  const embeddings = isAiConfigured() ? await generateDocumentEmbeddings(chunks.map((chunk) => chunk.content)) : [];
   const { error: clearChunkError } = await supabaseAdmin.from("document_chunks").delete().eq("paper_id", paper.id);
   if (clearChunkError) throw clearChunkError;
   const { error: chunkError } = await supabaseAdmin.from("document_chunks").insert(

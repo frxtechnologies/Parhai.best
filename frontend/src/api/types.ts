@@ -16,6 +16,7 @@ export interface Subject {
   name: string;
   code: string;
   level: "O_LEVEL" | "A_LEVEL";
+  board: string;
   description: string;
   color: string;
   icon: string;
@@ -221,6 +222,7 @@ export interface AiAssistantRequest {
   subjectId: number;
   subjectName: string;
   subjectCode: string;
+  board: string;
   selectedPaperId?: number | null;
   year?: number | null;
   session?: "MAY_JUNE" | "OCT_NOV" | "FEB_MAR" | null;

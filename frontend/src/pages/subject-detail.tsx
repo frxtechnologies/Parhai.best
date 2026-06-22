@@ -232,7 +232,7 @@ export default function SubjectDetail() {
               <div>
                 <h2 className="text-2xl font-bold text-[#0B1F3A]">AI Assistant for {subject.name}</h2>
                 <p className="mt-2 max-w-2xl text-gray-500">
-                  Open the scoped assistant for this subject. It searches Supabase directly and uses Gemini only to answer from retrieved records.
+                  Open the scoped assistant for this subject. It searches Supabase directly and uses the configured AI provider only for grounded answers.
                 </p>
               </div>
             </div>
