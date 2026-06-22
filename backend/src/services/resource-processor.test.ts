@@ -13,3 +13,9 @@ test("splits numbered questions and subparts without inventing content", () => {
   assert.deepEqual(rows.map((row) => row.marks), [3, 1, 2, 2]);
   assert.match(rows[2]!.text, /refractive index/i);
 });
+
+test("merges repeated question headers into one database row", () => {
+  const rows = splitNumberedQuestions("1 First page wording. [2]\n2 Another question. [1]\n1 Continued diagram wording.");
+  assert.deepEqual(rows.map((row) => row.number), ["1", "2"]);
+  assert.match(rows[0]!.text, /First page wording.*Continued diagram wording/);
+});

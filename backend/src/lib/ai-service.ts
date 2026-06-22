@@ -108,6 +108,24 @@ export async function generateAiAnswer(systemInstruction: string, prompt: string
   return getAiProvider() === "gemini" ? geminiChat(systemInstruction, prompt) : compatibleChat(systemInstruction, prompt);
 }
 
+function wait(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function withClassificationRetry<T>(action: () => Promise<T>) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try { return await action(); }
+    catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/rate limit|temporarily unavailable/i.test(message) || attempt === 3) break;
+      await wait(5_000 * (2 ** attempt));
+    }
+  }
+  throw lastError;
+}
+
 function localFeatureEmbedding(text: string) {
   const vector = Array<number>(AI_EMBEDDING_DIMENSIONS).fill(0);
   const tokens = text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
@@ -177,12 +195,17 @@ export async function classifyQuestions(subject: string, questions: Array<{ numb
     const batch = questions.slice(offset, offset + 10).map((question) => ({ ...question, text: question.text.slice(0, 1600) }));
     const instruction = "You classify real exam questions. Return JSON only with an items array. Never invent questions.";
     const prompt = `Classify these ${subject} questions. Every item needs number, topic, subtopic, difficulty (EASY, MEDIUM, HARD), and a one-sentence summary.\n${JSON.stringify(batch)}`;
-    const raw = getAiProvider() === "gemini" ? await geminiChat(instruction, prompt, true) : await compatibleChat(instruction, prompt, true);
-    const parsed = JSON.parse(raw.replace(/^```json\s*/i, "").replace(/\s*```$/, "")) as QuestionClassification[] | { items?: QuestionClassification[] };
-    const rows = Array.isArray(parsed) ? parsed : parsed.items ?? [];
-    for (const row of rows) {
-      if (!batch.some((question) => question.number === String(row.number))) continue;
-      classified.set(String(row.number), { ...row, number: String(row.number), difficulty: ["EASY", "MEDIUM", "HARD"].includes(row.difficulty) ? row.difficulty : "MEDIUM" });
+    try {
+      const raw = await withClassificationRetry(() => getAiProvider() === "gemini" ? geminiChat(instruction, prompt, true) : compatibleChat(instruction, prompt, true));
+      const parsed = JSON.parse(raw.replace(/^```json\s*/i, "").replace(/\s*```$/, "")) as QuestionClassification[] | { items?: QuestionClassification[] };
+      const rows = Array.isArray(parsed) ? parsed : parsed.items ?? [];
+      for (const row of rows) {
+        if (!batch.some((question) => question.number === String(row.number))) continue;
+        classified.set(String(row.number), { ...row, number: String(row.number), difficulty: ["EASY", "MEDIUM", "HARD"].includes(row.difficulty) ? row.difficulty : "MEDIUM" });
+      }
+    } catch {
+      // Continue indexing with deterministic subject fallbacks. A single
+      // provider outage must never make an uploaded resource unusable.
     }
   }
   return classified;

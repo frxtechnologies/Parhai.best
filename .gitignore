@@ -1,5 +1,6 @@
 node_modules/
 supabase/.temp/
+**/supabase/.temp/
 **/node_modules/
 
 dist/
@@ -21,3 +22,6 @@ out/
 coverage/
 .turbo/
 .cache/
+
+# Local Netlify folder
+.netlify

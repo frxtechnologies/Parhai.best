@@ -44,7 +44,9 @@ router.post("/resources/:resourceId/process", requireAdmin, async (req, res): Pr
     req.log.info({ resourceId, ...result }, "Resource processing completed");
     res.json({ resourceId, extractedCharacters: result.extractedText.length, ...result, extractedText: undefined });
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : "Resource processing failed.";
+    const message = cause instanceof Error ? cause.message
+      : cause && typeof cause === "object" && "message" in cause ? String(cause.message)
+        : "Resource processing failed.";
     req.log.error({ resourceId, error: cause }, "Resource processing failed");
     await client.from("resources").update({ status: "failed", processing_status: "failed", processing_error: message, updated_at: new Date().toISOString() }).eq("id", resourceId);
     const { data: job } = await client.from("processing_jobs").select("id").eq("resource_id", resourceId).order("created_at", { ascending: false }).limit(1).maybeSingle();

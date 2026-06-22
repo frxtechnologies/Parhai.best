@@ -87,10 +87,36 @@ export function splitNumberedQuestions(text: string): IndexedQuestion[] {
   }
   flush();
 
-  return rows.map((row) => {
+  const unique = new Map<string, IndexedQuestion>();
+  for (const row of rows) {
     const questionText = row.lines.join(" ").replace(/\s+/g, " ").trim();
-    return { number: row.number, text: questionText, marks: readMarks(questionText) };
-  });
+    const existing = unique.get(row.number);
+    unique.set(row.number, existing
+      ? { number: row.number, text: `${existing.text} ${questionText}`.trim(), marks: existing.marks ?? readMarks(questionText) }
+      : { number: row.number, text: questionText, marks: readMarks(questionText) });
+  }
+  return [...unique.values()];
+}
+
+function fallbackTopic(text: string, subject: string) {
+  const value = text.toLowerCase();
+  const subjectName = subject.toLowerCase();
+  if (subjectName.includes("physics")) {
+    if (/lens|mirror|ray|refraction|reflection|light|optic/.test(value)) return "Light";
+    if (/current|voltage|resistance|circuit|charge|electric/.test(value)) return "Electricity";
+    if (/force|moment|pressure|mass|weight|momentum/.test(value)) return "Forces";
+    if (/wave|frequency|wavelength|sound/.test(value)) return "Waves";
+    if (/heat|temperature|thermal/.test(value)) return "Thermal Physics";
+    if (/magnet|induction|transformer/.test(value)) return "Magnetism";
+    if (/radioactive|radiation|atom|nucleus/.test(value)) return "Atomic Physics";
+    if (/speed|velocity|acceleration|distance|motion/.test(value)) return "Motion";
+    if (/energy|power|work/.test(value)) return "Energy";
+    return "General Physics";
+  }
+  if (subjectName.includes("chem")) return /organic|alkane|alcohol/.test(value) ? "Organic Chemistry" : /acid|base|salt/.test(value) ? "Acids, Bases and Salts" : "General Chemistry";
+  if (subjectName.includes("bio")) return /cell|membrane|mitosis/.test(value) ? "Cells" : /gene|inherit|dna/.test(value) ? "Genetics" : "General Biology";
+  if (subjectName.includes("math")) return /triangle|circle|angle|shape/.test(value) ? "Geometry" : /equation|factor|algebra/.test(value) ? "Algebra" : "General Mathematics";
+  return `General ${subject}`;
 }
 
 async function extractFileText(resource: ProcessableResource, buffer: Buffer) {
@@ -174,6 +200,7 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     let classified = new Map();
     try {
       classified = await classifyQuestions(resource.subjects?.name ?? "Subject", numbered.map(({ number, text }) => ({ number, text })));
+      if (classified.size < numbered.length) classificationWarning = `${numbered.length - classified.size} questions used fallback topic tagging because the AI provider was unavailable or rate-limited.`;
     } catch (error) {
       classificationWarning = error instanceof Error ? error.message : "AI topic classification failed.";
     }
@@ -189,7 +216,7 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         paper_code: resource.paper_code,
         variant: resource.variant,
         question_number: question.number,
-        topic: tag?.topic ?? "Unclassified",
+        topic: tag?.topic ?? fallbackTopic(question.text, resource.subjects?.name ?? "Subject"),
         subtopic: tag?.subtopic ?? null,
         difficulty: tag?.difficulty ?? "MEDIUM",
         marks: question.marks,
