@@ -311,6 +311,28 @@ export default function AdminResources() {
     await load();
   }
 
+  async function importLegacy() {
+    if (!window.confirm("Import all legacy papers and extracted questions into the new AI system? Existing legacy data will not be deleted.")) return;
+    setBusy(true);
+    setMessage("Importing legacy papers and questions…");
+    try {
+      const client = requireSupabase();
+      const { data } = await client.auth.getSession();
+      const response = await fetch(`${API_BASE_URL}/api/resources/import-legacy`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${data.session?.access_token ?? ""}`, "Content-Type": "application/json" },
+      });
+      const body = await response.json() as { legacyPapers?: number; importedResources?: number; importedQuestions?: number; importedChunks?: number; error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Legacy import failed.");
+      setMessage(`Imported ${body.legacyPapers ?? 0} legacy papers, ${body.importedQuestions ?? 0} questions, and ${body.importedChunks ?? 0} searchable chunks. Old records were preserved.`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Legacy import failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteResource(id: number) {
     if (!window.confirm("Delete this resource and all of its AI chunks?"))
       return;
@@ -600,6 +622,14 @@ export default function AdminResources() {
               <p className="text-sm text-gray-500">
                 {filtered.length} matching resources
               </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={importLegacy}
+                className="mt-3 rounded-lg border border-[#14B8A6] px-3 py-2 text-sm font-semibold text-[#0B1F3A] disabled:opacity-50"
+              >
+                Import legacy papers into new AI system
+              </button>
             </div>
             <div className="grid gap-2 sm:grid-cols-3">
               <select

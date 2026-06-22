@@ -52,7 +52,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     match_threshold: 0.12,
   });
   let indexedQuery = client.from("question_index")
-    .select("id,resource_id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,source_file,year,session,paper_code,variant,resources!inner(title,is_approved)")
+    .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,source_file,year,session,paper_code,variant,resources!inner(title,is_approved)")
     .eq("subject_id", subject.id).eq("resources.is_approved", true);
   if (year) indexedQuery = indexedQuery.eq("year", year);
   if (terms.length) indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `question_text.ilike.%${term}%`, `answer_text.ilike.%${term}%`]).join(","));
@@ -82,7 +82,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     paperId: null,
     reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
     content: `Question: ${row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
-    metadata: { resourceId: row.resource_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
+    metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
   }));
   const seen = new Set<string>();
   const uniqueSources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
@@ -150,7 +150,7 @@ async function retrieveSources(client: SupabaseClient, input: z.infer<typeof Req
   const results: SourceResult[] = [];
   for (const row of questions.data ?? []) {
     const paper = Array.isArray(row.papers) ? row.papers[0] : row.papers;
-    const metadata = { title: paper?.title, sourceFile: paper?.title, year: row.year, session: paper?.session, paperNumber: paper?.paper_number, variant: paper?.variant, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks };
+    const metadata = { legacyQuestionId: row.id, title: paper?.title, sourceFile: paper?.title, year: row.year, session: paper?.session, paperNumber: paper?.paper_number, variant: paper?.variant, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks };
     results.push({
       sourceType: "question", id: row.id, paperId: row.paper_id,
       reference: formatCitation(subject, metadata),
@@ -182,20 +182,31 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     if (input.subjectName && input.subjectName.toLowerCase() !== subject.name.toLowerCase()) { res.status(400).json({ error: "Subject scope does not match the selected subject." }); return; }
     if (input.board && input.board.toLowerCase() !== subject.board.toLowerCase()) { res.status(400).json({ error: "Board scope does not match the selected subject." }); return; }
 
-    const resourceRetrieval = await retrieveResourceSources(client, input, subject);
-    let diagnostics: Record<string, unknown>;
-    let retrieved: SourceResult[];
-    if (resourceRetrieval.resources.length) {
-      const unprocessed = resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
-      diagnostics = { matchedResources: resourceRetrieval.resources, matchedChunks: resourceRetrieval.sources.length, indexedQuestions: resourceRetrieval.indexedQuestionCount };
-      if (unprocessed) { res.json({ answer: "This resource is uploaded but not processed yet. Please process it first.", sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
-      retrieved = resourceRetrieval.sources;
-    } else {
-      const retrieval = await retrieveSources(client, input, subject);
-      const onlyUnprocessedPapers = retrieval.matchedPapers.length > 0 && retrieval.extractedQuestionCount === 0;
-      diagnostics = { matchedPapers: retrieval.matchedPapers, extractedQuestionCount: retrieval.extractedQuestionCount, matchedQuestionRows: retrieval.matchedQuestions };
-      if (onlyUnprocessedPapers) { res.json({ answer: UNPROCESSED_PAPER_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
-      retrieved = retrieval.sources;
+    const [resourceRetrieval, legacyRetrieval] = await Promise.all([
+      retrieveResourceSources(client, input, subject),
+      retrieveSources(client, input, subject),
+    ]);
+    const diagnostics: Record<string, unknown> = {
+      matchedResources: resourceRetrieval.resources,
+      matchedChunks: resourceRetrieval.sources.length,
+      indexedQuestions: resourceRetrieval.indexedQuestionCount,
+      matchedPapers: legacyRetrieval.matchedPapers,
+      extractedQuestionCount: legacyRetrieval.extractedQuestionCount,
+      matchedQuestionRows: legacyRetrieval.matchedQuestions,
+    };
+    const combined = [...resourceRetrieval.sources, ...legacyRetrieval.sources];
+    const seenEvidence = new Set<string>();
+    const retrieved = rankEvidence(combined.filter((source) => {
+      const key = `${source.sourceType}:${source.metadata.legacyQuestionId ?? source.metadata.resourceId ?? source.paperId ?? source.id}:${source.metadata.questionNumber ?? ""}:${source.content.slice(0, 120)}`;
+      if (seenEvidence.has(key)) return false;
+      seenEvidence.add(key);
+      return true;
+    }), getFilters(input.message, input.year).terms, 12);
+    const onlyUnprocessedResources = resourceRetrieval.resources.length > 0 && resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
+    const onlyUnprocessedPapers = legacyRetrieval.matchedPapers.length > 0 && legacyRetrieval.extractedQuestionCount === 0;
+    if (!retrieved.length && (onlyUnprocessedResources || onlyUnprocessedPapers)) {
+      res.json({ answer: onlyUnprocessedResources ? "This resource is uploaded but not processed yet. Please process it first." : UNPROCESSED_PAPER_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) });
+      return;
     }
     if (retrieved.length === 0) { res.json({ answer: MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
 

@@ -1,9 +1,21 @@
 import { Router, type IRouter } from "express";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../middleware/auth";
-import { processResourceContent, type ProcessableResource } from "../services/resource-processor";
+import { processResourceById } from "../services/resource-job";
+import { importLegacyPapers } from "../services/legacy-import";
 
 const router: IRouter = Router();
+
+router.post("/resources/import-legacy", requireAdmin, async (req, res): Promise<void> => {
+  try {
+    const result = await importLegacyPapers(res.locals.supabase as SupabaseClient);
+    req.log.info(result, "Legacy papers imported into resource pipeline");
+    res.json(result);
+  } catch (error) {
+    req.log.error({ error }, "Legacy import failed");
+    res.status(422).json({ error: error instanceof Error ? error.message : "Legacy import failed." });
+  }
+});
 
 router.post("/resources/:resourceId/process", requireAdmin, async (req, res): Promise<void> => {
   const client = res.locals.supabase as SupabaseClient;
@@ -11,36 +23,7 @@ router.post("/resources/:resourceId/process", requireAdmin, async (req, res): Pr
   if (!Number.isInteger(resourceId) || resourceId <= 0) { res.status(400).json({ error: "Invalid resource id." }); return; }
 
   try {
-    const { data: resource, error } = await client.from("resources")
-      .select("id,subject_id,level,board,title,resource_type,year,session,paper_code,variant,bucket,storage_path,file_type,original_filename,related_resource_id,subjects(name,code,board)")
-      .eq("id", resourceId).single();
-    if (error || !resource) { res.status(404).json({ error: "Resource not found." }); return; }
-
-    const now = new Date().toISOString();
-    const { data: previousJob } = await client.from("processing_jobs").select("id,status,retry_count")
-      .eq("resource_id", resourceId).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    let jobId: number;
-    if (previousJob && ["uploaded", "extracting", "indexing"].includes(previousJob.status)) {
-      jobId = Number(previousJob.id);
-      const { error: jobError } = await client.from("processing_jobs").update({ status: "extracting", error_message: null, started_at: now, updated_at: now }).eq("id", jobId);
-      if (jobError) throw jobError;
-    } else {
-      const { data: job, error: jobError } = await client.from("processing_jobs").insert({ resource_id: resourceId, status: "extracting", retry_count: Number(previousJob?.retry_count ?? 0) + 1, started_at: now }).select("id").single();
-      if (jobError || !job) throw jobError ?? new Error("Could not create processing job.");
-      jobId = Number(job.id);
-    }
-    const { error: processingError } = await client.from("resources").update({ status: "processing", processing_status: "processing", processing_error: null, updated_at: new Date().toISOString() }).eq("id", resourceId);
-    if (processingError) throw processingError;
-
-    const result = await processResourceContent(client, resource as unknown as ProcessableResource, async () => {
-      const { error: indexingError } = await client.from("processing_jobs").update({ status: "indexing", updated_at: new Date().toISOString() }).eq("id", jobId);
-      if (indexingError) throw indexingError;
-    });
-    const completedAt = new Date().toISOString();
-    const { error: updateError } = await client.from("resources").update({ extracted_text: result.extractedText, status: "processed", processing_status: "processed", processing_error: result.classificationWarning, updated_at: completedAt }).eq("id", resourceId);
-    if (updateError) throw updateError;
-    const { error: completeJobError } = await client.from("processing_jobs").update({ status: "completed", error_message: result.classificationWarning, completed_at: completedAt, updated_at: completedAt }).eq("id", jobId);
-    if (completeJobError) throw completeJobError;
+    const result = await processResourceById(client, resourceId);
     req.log.info({ resourceId, ...result }, "Resource processing completed");
     res.json({ resourceId, extractedCharacters: result.extractedText.length, ...result, extractedText: undefined });
   } catch (cause) {
@@ -48,9 +31,6 @@ router.post("/resources/:resourceId/process", requireAdmin, async (req, res): Pr
       : cause && typeof cause === "object" && "message" in cause ? String(cause.message)
         : "Resource processing failed.";
     req.log.error({ resourceId, error: cause }, "Resource processing failed");
-    await client.from("resources").update({ status: "failed", processing_status: "failed", processing_error: message, updated_at: new Date().toISOString() }).eq("id", resourceId);
-    const { data: job } = await client.from("processing_jobs").select("id").eq("resource_id", resourceId).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (job) await client.from("processing_jobs").update({ status: "failed", error_message: message, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", job.id);
     res.status(422).json({ error: message });
   }
 });
