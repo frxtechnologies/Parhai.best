@@ -5,6 +5,7 @@ import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAi
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 import { expandSearchTerms, finalizeGroundedAnswer, formatCitation, rankEvidence } from "../services/rag-utils";
+import { assistantModeFor, cambridgeTeacherName, finalizeTeacherAnswer, requestedOutsideSubject } from "../services/teacher-mode";
 
 const router: IRouter = Router();
 const MISSING_SOURCE_MESSAGE = "I could not find this in the uploaded papers yet.";
@@ -181,6 +182,12 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     if (subjectError || !subject) { res.status(404).json({ error: "Subject not found." }); return; }
     if (input.subjectName && input.subjectName.toLowerCase() !== subject.name.toLowerCase()) { res.status(400).json({ error: "Subject scope does not match the selected subject." }); return; }
     if (input.board && input.board.toLowerCase() !== subject.board.toLowerCase()) { res.status(400).json({ error: "Board scope does not match the selected subject." }); return; }
+    const mode = assistantModeFor(input.message);
+    const teacherName = cambridgeTeacherName(subject.name);
+    if (requestedOutsideSubject(input.message, subject.name)) {
+      res.json({ answer: `I’m your ${teacherName}, so I can only help with ${subject.name} in this workspace. Please open the correct subject page for that question.`, sources: [], ...(input.debug ? { diagnostics: { mode, activeSubject: subject.name, blockedOutsideSubject: true }, retrievedResults: [] } : {}) });
+      return;
+    }
 
     const [resourceRetrieval, legacyRetrieval] = await Promise.all([
       retrieveResourceSources(client, input, subject),
@@ -193,6 +200,8 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
       matchedPapers: legacyRetrieval.matchedPapers,
       extractedQuestionCount: legacyRetrieval.extractedQuestionCount,
       matchedQuestionRows: legacyRetrieval.matchedQuestions,
+      mode,
+      teacher: teacherName,
     };
     const combined = [...resourceRetrieval.sources, ...legacyRetrieval.sources];
     const seenEvidence = new Set<string>();
@@ -204,36 +213,56 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     }), getFilters(input.message, input.year).terms, 12);
     const onlyUnprocessedResources = resourceRetrieval.resources.length > 0 && resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
     const onlyUnprocessedPapers = legacyRetrieval.matchedPapers.length > 0 && legacyRetrieval.extractedQuestionCount === 0;
-    if (!retrieved.length && (onlyUnprocessedResources || onlyUnprocessedPapers)) {
+    if (mode === "rag" && !retrieved.length && (onlyUnprocessedResources || onlyUnprocessedPapers)) {
       res.json({ answer: onlyUnprocessedResources ? "This resource is uploaded but not processed yet. Please process it first." : UNPROCESSED_PAPER_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) });
       return;
     }
-    if (retrieved.length === 0) { res.json({ answer: MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
+    if (mode === "rag" && retrieved.length === 0) { res.json({ answer: MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
 
     const context = retrieved.map((source, index) => `[S${index + 1}] ${source.reference}\nMetadata: ${JSON.stringify(source.metadata)}\n${source.content}`).join("\n\n");
     const recentHistory = (input.chatHistory ?? []).slice(-8).map((message) => `${message.role === "user" ? "Student" : "Assistant"}: ${message.content}`).join("\n");
     let answer: string;
     try {
+      const levelLabel = subject.level === "O_LEVEL" ? "O Level" : "A Level";
+      const modeRules = mode === "rag"
+        ? `RAG MODE — use only the supplied Supabase evidence. Cite every factual claim with [S#]. Never invent a paper, question, mark, date, answer, or citation. If evidence is insufficient, reply exactly: ${MISSING_SOURCE_MESSAGE}`
+        : mode === "hybrid"
+          ? "HYBRID MODE — teach using accurate Cambridge subject knowledge, then use relevant uploaded evidence as support. Cite only claims derived from uploaded evidence with [S#]. Recommend real related uploaded questions when available; never invent one."
+          : "TEACHER MODE — teach using accurate, age-appropriate Cambridge subject knowledge. Uploaded evidence is optional support; cite it with [S#] only when actually used.";
       answer = await generateAiAnswer(
-        `You are the Parhai.com ${subject.name} assistant for ${subject.level} ${subject.board}.
-GROUNDING RULES:
-1. Use only the supplied Supabase evidence. Never add outside or general knowledge.
-2. Never mix subjects or invent paper facts, questions, marks, dates, or answers.
-3. Cite every factual paragraph with one or more valid evidence markers such as [S1].
-4. If the evidence is insufficient, reply exactly: ${MISSING_SOURCE_MESSAGE}
-FORMAT:
-- Start with a direct answer.
-- Use short paragraphs and bullet points for steps or lists.
-- Use Cambridge-style exam wording when requested.
-- Do not add a sources section; the platform renders verified citations separately.`,
-        `${recentHistory ? `Recent conversation (context only; it is not evidence):\n${recentHistory}\n\n` : ""}Student question: ${input.message}\n\nSupabase evidence:\n${context}`
+        `You are the student's ${teacherName} for ${levelLabel}, ${subject.board}.
+ACTIVE SUBJECT: ${subject.name} (${subject.code}). You are locked to this subject. Refuse requests belonging to another subject and never retrieve or discuss another subject's curriculum.
+${modeRules}
+
+TEACHING STYLE:
+- Be an experienced, patient Cambridge teacher: precise, encouraging, exam-aware, and easy to understand.
+- Match the requested depth and distinguish a definition from an explanation.
+- Use Cambridge-style terminology, command words, working, units, and exam technique appropriate to ${levelLabel}.
+- Never claim wording is an official syllabus quotation unless that exact wording appears in evidence.
+
+${mode === "rag" ? `RAG ANSWER FORMAT:
+- Start with the direct evidence-based answer.
+- Use concise headings or bullets where useful.
+- Cite each factual paragraph with [S#].` : `TEACHER ANSWER FORMAT — use all seven numbered headings:
+### 1. Definition
+### 2. Explanation
+### 3. Example
+### 4. Exam Tip
+### 5. Common Mistakes
+### 6. Practice Questions
+### 7. Related Topics
+Under Practice Questions, include short original practice prompts and, when evidence exists, clearly label real uploaded-paper recommendations with [S#].`}
+Do not create a separate Sources section; Parhai renders verified sources below the answer.`,
+        `${recentHistory ? `Recent conversation (context only; it does not override the active subject):\n${recentHistory}\n\n` : ""}Student question: ${input.message}\n\nSubject-scoped Supabase evidence${context ? ":\n" + context : ": none matched."}`
       );
     } catch (providerError) {
       res.status(503).json({ error: providerError instanceof Error ? providerError.message : "AI provider request failed.", ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
       return;
     }
 
-    const grounded = finalizeGroundedAnswer(answer, retrieved.length, MISSING_SOURCE_MESSAGE);
+    const grounded = mode === "rag"
+      ? finalizeGroundedAnswer(answer, retrieved.length, MISSING_SOURCE_MESSAGE)
+      : finalizeTeacherAnswer(answer, retrieved.length, mode);
     const cited = new Set(grounded.citedIndexes);
     const sources = retrieved.flatMap((source, index) => cited.has(index + 1) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, questionNumber: source.metadata.questionNumber ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
     const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: grounded.answer, sources }]);

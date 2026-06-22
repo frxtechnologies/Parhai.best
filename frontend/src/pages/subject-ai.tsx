@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "wouter";
 
 const suggestedPrompts = [
-  "Explain this question step by step",
+  "Explain this topic like a Cambridge teacher",
   "Give an examiner-style answer",
   "Show the marking scheme logic",
   "Find similar past paper questions",
@@ -23,6 +23,11 @@ const suggestedPrompts = [
   "Summarize this paper",
   "Predict repeated question patterns from past papers",
 ];
+
+function teacherNameFor(subjectName: string) {
+  if (/math/i.test(subjectName)) return "Cambridge Mathematics Teacher";
+  return `Cambridge ${subjectName} Teacher`;
+}
 
 export default function SubjectAi() {
   const params = useParams();
@@ -40,6 +45,7 @@ export default function SubjectAi() {
 
   const messages = useMemo(() => [...history, ...localMessages], [history, localMessages]);
   const selectedPaper = papers.find((paper) => paper.id === Number(selectedPaperId));
+  const teacherName = subject ? teacherNameFor(subject.name) : "Cambridge Teacher";
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -111,11 +117,11 @@ export default function SubjectAi() {
           <div>
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#0B1F3A]">
               <Sparkles className="h-4 w-4" />
-              AI Assistant
+              Subject Teacher
             </div>
-            <h1 className="text-2xl font-bold text-[#0B1F3A]">{subject.name}</h1>
+            <h1 className="text-2xl font-bold text-[#0B1F3A]">{teacherName}</h1>
             <p className="mt-1 text-sm text-gray-500">
-              Answers are restricted to {subject.name} ({subject.code}) and retrieved Parhai content.
+              Locked to {subject.name} ({subject.code}) · Cambridge teaching with verified Parhai evidence.
             </p>
           </div>
 
@@ -149,9 +155,9 @@ export default function SubjectAi() {
                     <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F8FAFC] text-[#0B1F3A]">
                       <Bot className="h-7 w-7" />
                     </div>
-                    <h2 className="text-xl font-bold text-[#0B1F3A]">Ask from uploaded Parhai content</h2>
+                    <h2 className="text-xl font-bold text-[#0B1F3A]">Ask your {teacherName}</h2>
                     <p className="mt-2 text-sm text-gray-500">
-                      The assistant will search uploaded papers, marking schemes, chunks, and notes. If content is missing, it must say so.
+                      Learn concepts, revise chapters, practise exam technique, or search real uploaded papers and marking schemes.
                     </p>
                   </div>
                 </div>
@@ -169,7 +175,7 @@ export default function SubjectAi() {
                     <Bot className="h-4 w-4" />
                   </div>
                   <div className="rounded-2xl rounded-tl-none border bg-gray-50 px-4 py-3 text-sm text-gray-500">
-                    Searching Parhai sources...
+                    Preparing a subject-locked Cambridge answer...
                   </div>
                 </div>
               )}
@@ -203,7 +209,7 @@ export default function SubjectAi() {
                       handleSend();
                     }
                   }}
-                  placeholder="Ask about a question, marking scheme, topic, or uploaded paper..."
+                  placeholder={`Ask your ${teacherName} about a concept, revision, or past paper...`}
                   rows={2}
                   className="flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none focus:border-[#0B1F3A] focus:bg-white focus:ring-4 focus:ring-[#0B1F3A]/10"
                 />
@@ -220,7 +226,7 @@ export default function SubjectAi() {
 
           <aside className="space-y-5">
             <div className="rounded-2xl border bg-white p-5 shadow-sm">
-              <h2 className="font-bold text-[#0B1F3A]">RAG Scope</h2>
+              <h2 className="font-bold text-[#0B1F3A]">Teacher Scope</h2>
               <div className="mt-4 space-y-3 text-sm text-gray-600">
                 <p>Level: {subject.level === "O_LEVEL" ? "O Level" : "A Level"}</p>
                 <p>Subject: {subject.name}</p>
@@ -294,6 +300,9 @@ function ChatBubble({ message }: { message: AiMessage }) {
 function FormattedAnswer({ content }: { content: string }) {
   return <div className="space-y-2">{content.split(/\n+/).filter(Boolean).map((line, index) => {
     const value = line.trim();
+    const heading = value.match(/^#{1,4}\s+(.+)$/);
+    if (heading) return <h3 key={index} className="pt-2 font-bold text-[#0B1F3A]">{heading[1]}</h3>;
+    if (/^-\s+/.test(value)) return <div key={index} className="flex gap-2"><span aria-hidden>•</span><span>{value.replace(/^-\s+/, "")}</span></div>;
     if (/^[-•]\s+/.test(value)) return <div key={index} className="flex gap-2"><span aria-hidden>•</span><span>{value.replace(/^[-•]\s+/, "")}</span></div>;
     if (/^(?:answer|explanation|steps?|key points?|exam-style answer):?$/i.test(value)) return <div key={index} className="font-bold text-[#0B1F3A]">{value.replace(/:$/, "")}</div>;
     return <p key={index}>{value}</p>;
