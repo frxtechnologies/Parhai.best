@@ -1,233 +1,258 @@
-import { getGetDashboardQueryKey, useGetDashboard } from "@/api/client";
+import { getGetDashboardQueryKey, useGetDashboard, useListNotes, useListPapers, useListQuestions } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
 import { useAuth } from "@/context/auth-context";
-import { ArrowRight, BookOpen, FileText, LineChart, LogOut, Settings, Sparkles, Target } from "lucide-react";
+import {
+  ArrowRight,
+  BookOpen,
+  Bot,
+  CalendarDays,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  FileText,
+  Lightbulb,
+  NotebookText,
+  Settings,
+  Target,
+} from "lucide-react";
 import { Link } from "wouter";
 
+const tutorPrompts = [
+  "Explain a difficult topic",
+  "Create a revision plan",
+  "Find past paper questions",
+];
+
 export default function Dashboard() {
-  const { logout, user } = useAuth();
+  const { user } = useAuth();
   const { data: dashboard, isLoading, isError, error } = useGetDashboard({
     query: { queryKey: getGetDashboardQueryKey() },
   });
+  const { data: questions = [] } = useListQuestions({});
+  const { data: papers = [] } = useListPapers({});
+  const { data: notes = [] } = useListNotes({});
 
   if (isLoading) {
-    return (
-      <AppLayout>
-        <div className="flex h-[50vh] items-center justify-center text-sm text-gray-500">Loading dashboard...</div>
-      </AppLayout>
-    );
+    return <AppLayout><div className="flex h-[50vh] items-center justify-center text-sm text-slate-500">Loading your workspace…</div></AppLayout>;
   }
 
   if (isError) {
-    return (
-      <AppLayout>
-        <EmptyPanel
-          icon={Settings}
-          title="Dashboard is not ready"
-          body={error instanceof Error ? error.message : "Connect Supabase and complete onboarding to load your workspace."}
-        />
-      </AppLayout>
-    );
+    return <AppLayout><EmptyPanel icon={Settings} title="Dashboard is not ready" body={error instanceof Error ? error.message : "Connect Supabase and complete onboarding to load your workspace."} /></AppLayout>;
   }
 
   if (!dashboard) return null;
 
   const selectedSubjects = dashboard.subjectProgress;
-  const uploadedPapers = selectedSubjects.reduce((sum, subject) => sum + subject.papersCompleted, 0);
-  const nextSubject = selectedSubjects[0];
-
+  const continueSubject = [...selectedSubjects].sort((a, b) => {
+    if (!a.lastStudied) return 1;
+    if (!b.lastStudied) return -1;
+    return new Date(b.lastStudied).getTime() - new Date(a.lastStudied).getTime();
+  })[0];
+  const physicsTopics = getTopPhysicsTopics(questions);
   const stats = [
-    { label: "Selected subjects", value: dashboard.subjectsEnrolled, icon: BookOpen, tone: "text-[#0B1F3A]", bg: "bg-[#0B1F3A]/10" },
-    { label: "Questions attempted", value: dashboard.questionsAttempted, icon: Target, tone: "text-[#06B6D4]", bg: "bg-[#06B6D4]/10" },
-    { label: "Study hours", value: dashboard.totalHoursStudied, icon: LineChart, tone: "text-[#14B8A6]", bg: "bg-[#14B8A6]/10" },
-    { label: "Uploaded papers", value: uploadedPapers, icon: FileText, tone: "text-[#F59E0B]", bg: "bg-[#F59E0B]/10" },
+    { label: "Selected subjects", value: dashboard.subjectsEnrolled, icon: BookOpen, detail: "Your active study plan" },
+    { label: "Available questions", value: questions.length, icon: Target, detail: "Ready for practice" },
+    { label: "Papers uploaded", value: papers.length, icon: FileText, detail: "Across your subjects" },
+    { label: "Notes available", value: notes.length, icon: NotebookText, detail: "Revision resources" },
   ];
 
   return (
     <AppLayout>
-      <div className="space-y-7">
-        <header className="overflow-hidden rounded-3xl bg-[#0B1F3A] p-6 text-white shadow-sm md:p-8">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white/80">
-                <Sparkles className="h-3.5 w-3.5 text-[#06B6D4]" />
-                Student workspace
-              </p>
-              <h1 className="text-3xl font-bold md:text-4xl">
-                Welcome{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-white/70 md:text-base">
-                Your dashboard is scoped to the subjects you selected. Add papers, notes, and practice work to build real progress over time.
-              </p>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              {nextSubject && (
-                <Link
-                  href={`/subject/${nextSubject.subjectId}`}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-[#0B1F3A] transition-colors hover:bg-[#F8FAFC]"
-                >
-                  Continue studying
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              )}
-              <Link
-                href="/onboarding"
-                className="inline-flex items-center justify-center rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10"
-              >
-                Edit subjects
+      <div className="space-y-6 pb-8">
+        <header className="flex flex-col gap-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/40 sm:p-7 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-medium text-teal-700">Student dashboard</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[#0B1F3A] sm:text-3xl">
+              Welcome back{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
+            </h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+              Pick up where you left off, review your subjects, and prepare for your next Cambridge exam.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            {continueSubject && (
+              <Link href={`/subject/${continueSubject.subjectId}`} className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#142f50]">
+                Continue studying <ArrowRight className="h-4 w-4" />
               </Link>
-              <button
-                type="button"
-                onClick={logout}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10"
-              >
-                <LogOut className="h-4 w-4" />
-                Log out
-              </button>
-            </div>
+            )}
+            <Link href="/onboarding" className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-[#0B1F3A] transition hover:bg-slate-50">
+              Manage subjects
+            </Link>
           </div>
         </header>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {stats.map((stat) => (
-            <div key={stat.label} className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-              <div className={`mb-5 flex h-11 w-11 items-center justify-center rounded-xl ${stat.bg} ${stat.tone}`}>
-                <stat.icon className="h-5 w-5" />
+            <article key={stat.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/30">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-slate-500">{stat.label}</p>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight text-[#0B1F3A]">{stat.value}</p>
+                  <p className="mt-1 text-xs text-slate-400">{stat.detail}</p>
+                </div>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+                  <stat.icon className="h-5 w-5" />
+                </span>
               </div>
-              <div className="text-3xl font-bold text-[#0B1F3A]">{stat.value}</div>
-              <div className="mt-1 text-sm text-gray-500">{stat.label}</div>
-            </div>
+            </article>
           ))}
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-[#0B1F3A]">Selected subjects</h2>
-                <p className="mt-1 text-sm text-gray-500">Only your chosen subjects appear here.</p>
-              </div>
-              <Link href="/onboarding" className="inline-flex w-fit items-center gap-1 text-sm font-semibold text-[#0B1F3A]">
-                Change selection
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </div>
-
-            {selectedSubjects.length > 0 ? (
-              <div className="grid gap-3 md:grid-cols-2">
-                {selectedSubjects.map((subject) => {
-                  const totalActivity = subject.questionsAttempted + subject.papersCompleted + subject.notesRead;
-                  return (
-                    <Link key={subject.subjectId} href={`/subject/${subject.subjectId}`}>
-                      <div className="group min-h-36 rounded-2xl border border-gray-100 bg-white p-4 transition-all hover:-translate-y-0.5 hover:border-[#0B1F3A]/30 hover:shadow-md hover:shadow-[#0B1F3A]/10">
-                        <div className="mb-4 flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <span
-                              className="flex h-11 w-11 items-center justify-center rounded-xl text-sm font-bold text-white"
-                              style={{ backgroundColor: subject.subjectColor }}
-                            >
-                              {subject.subjectName.charAt(0)}
-                            </span>
-                            <div>
-                              <h3 className="font-semibold text-[#0B1F3A] group-hover:text-[#0B1F3A]">
-                                {subject.subjectName}
-                              </h3>
-                              <p className="mt-0.5 text-xs text-gray-500">
-                                {totalActivity > 0 ? `${totalActivity} saved activity items` : "Ready to start"}
-                              </p>
-                            </div>
-                          </div>
-                          <ArrowRight className="mt-1 h-4 w-4 text-gray-300 transition-colors group-hover:text-[#0B1F3A]" />
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-2">
-                          <Metric label="Questions" value={subject.questionsAttempted} />
-                          <Metric label="Papers" value={subject.papersCompleted} />
-                          <Metric label="Notes" value={subject.notesRead} />
-                        </div>
-                      </div>
-                    </Link>
-                  );
-                })}
+        <section className="grid gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(300px,.8fr)]">
+          <Panel>
+            <SectionHeading eyebrow="Continue learning" title={continueSubject?.subjectName ?? "Choose your first subject"} action={continueSubject ? <Link href={`/subject/${continueSubject.subjectId}`} className="text-sm font-semibold text-teal-700">Open subject</Link> : undefined} />
+            {continueSubject ? (
+              <div className="mt-5 grid gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-xl text-lg font-semibold text-white" style={{ backgroundColor: continueSubject.subjectColor || "#0B1F3A" }}>
+                  {continueSubject.subjectName.charAt(0)}
+                </div>
+                <div>
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-medium text-[#0B1F3A]">Course progress</span>
+                    <span className="font-semibold text-[#0B1F3A]">{continueSubject.percentComplete}%</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.min(continueSubject.percentComplete, 100)}%` }} />
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500">
+                    <span>{continueSubject.questionsAttempted} questions attempted</span>
+                    <span>{continueSubject.papersCompleted} papers completed</span>
+                    <span>{continueSubject.notesRead} notes read</span>
+                  </div>
+                </div>
               </div>
             ) : (
-              <EmptyPanel
-                icon={BookOpen}
-                title="No subjects selected"
-                body="Choose O Level or A Level subjects to start building a focused dashboard."
-                action={<Link href="/onboarding" className="font-semibold text-[#0B1F3A]">Choose subjects</Link>}
-              />
+              <p className="mt-4 text-sm text-slate-500">Select subjects to create your focused learning workspace.</p>
             )}
-          </div>
+          </Panel>
 
-          <div className="space-y-6">
-            <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-[#0B1F3A]">Study snapshot</h2>
-              <div className="mt-5 space-y-4">
-                <SnapshotRow label="Selected subjects" value={dashboard.subjectsEnrolled} />
-                <SnapshotRow label="Uploaded papers" value={uploadedPapers} />
-                <SnapshotRow label="Questions attempted" value={dashboard.questionsAttempted} />
-              </div>
+          <Panel className="border-teal-100 bg-teal-50/40">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-teal-700 shadow-sm"><Bot className="h-5 w-5" /></span>
+              <div><p className="text-xs font-semibold uppercase tracking-wider text-teal-700">AI Tutor</p><h2 className="font-semibold text-[#0B1F3A]">Ask your Cambridge teacher</h2></div>
             </div>
+            <div className="mt-4 space-y-2">
+              {tutorPrompts.map((prompt) => continueSubject ? (
+                <Link key={prompt} href={`/subject/${continueSubject.subjectId}/ai`} className="flex items-center justify-between rounded-lg border border-teal-100 bg-white px-3 py-2.5 text-sm text-slate-600 transition hover:border-teal-300 hover:text-[#0B1F3A]">
+                  {prompt}<ChevronRight className="h-4 w-4 text-slate-400" />
+                </Link>
+              ) : <div key={prompt} className="rounded-lg border border-teal-100 bg-white px-3 py-2.5 text-sm text-slate-400">{prompt}</div>)}
+            </div>
+          </Panel>
+        </section>
 
-            <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-[#0B1F3A]">Recent activity</h2>
-              {dashboard.recentActivity.length > 0 ? (
-                <div className="mt-4 space-y-3">
-                  {dashboard.recentActivity.map((activity) => (
-                    <div key={activity.id} className="rounded-xl bg-gray-50 p-3 text-sm text-gray-600">
-                      {activity.description}
+        <Panel>
+          <SectionHeading eyebrow="Your courses" title="Subject progress" action={<Link href="/subjects" className="inline-flex items-center gap-1 text-sm font-semibold text-teal-700">View all <ArrowRight className="h-4 w-4" /></Link>} />
+          {selectedSubjects.length ? (
+            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {selectedSubjects.map((subject) => (
+                <Link key={subject.subjectId} href={`/subject/${subject.subjectId}`} className="group rounded-xl border border-slate-200 p-4 transition hover:border-slate-300 hover:shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-semibold text-white" style={{ backgroundColor: subject.subjectColor || "#0B1F3A" }}>{subject.subjectName.charAt(0)}</span>
+                      <div><h3 className="font-semibold text-[#0B1F3A]">{subject.subjectName}</h3><p className="text-xs text-slate-400">{subject.hoursStudied} hours studied</p></div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-4 text-sm leading-6 text-gray-500">No activity recorded yet. Open a selected subject to begin studying.</p>
-              )}
+                    <ArrowRight className="h-4 w-4 text-slate-300 transition group-hover:text-teal-700" />
+                  </div>
+                  <div className="mt-4 flex items-center justify-between text-xs"><span className="text-slate-500">Progress</span><span className="font-semibold text-[#0B1F3A]">{subject.percentComplete}%</span></div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.min(subject.percentComplete, 100)}%` }} /></div>
+                  <div className="mt-4 grid grid-cols-3 divide-x divide-slate-100 text-center">
+                    <MiniMetric label="Questions" value={subject.questionsAttempted} />
+                    <MiniMetric label="Papers" value={subject.papersCompleted} />
+                    <MiniMetric label="Notes" value={subject.notesRead} />
+                  </div>
+                </Link>
+              ))}
             </div>
-          </div>
+          ) : <EmptyPanel icon={BookOpen} title="No subjects selected" body="Choose O Level or A Level subjects to begin." />}
+        </Panel>
+
+        <section className="grid gap-5 lg:grid-cols-3">
+          <Panel>
+            <SectionHeading eyebrow="Your timeline" title="Recent activity" />
+            {dashboard.recentActivity.length ? (
+              <div className="mt-4 divide-y divide-slate-100">
+                {dashboard.recentActivity.slice(0, 5).map((activity) => (
+                  <div key={activity.id} className="flex gap-3 py-3 first:pt-0">
+                    <span className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500"><CheckCircle2 className="h-3.5 w-3.5" /></span>
+                    <div><p className="text-sm leading-5 text-slate-600">{activity.description}</p><p className="mt-1 text-xs text-slate-400">{activity.subjectName} · {formatRelativeDate(activity.createdAt)}</p></div>
+                  </div>
+                ))}
+              </div>
+            ) : <EmptyText icon={Clock3} text="Your study activity will appear here." />}
+          </Panel>
+
+          <Panel>
+            <SectionHeading eyebrow="Plan ahead" title="Upcoming tasks" />
+            {dashboard.upcomingExams.length ? (
+              <div className="mt-4 space-y-3">
+                {dashboard.upcomingExams.slice(0, 4).map((exam) => (
+                  <div key={exam.id} className="flex items-center gap-3 rounded-lg border border-slate-200 p-3">
+                    <div className="min-w-12 rounded-lg bg-slate-50 px-2 py-1.5 text-center"><p className="text-lg font-semibold text-[#0B1F3A]">{exam.daysUntil}</p><p className="text-[10px] uppercase text-slate-400">days</p></div>
+                    <div className="min-w-0"><p className="truncate text-sm font-medium text-[#0B1F3A]">{exam.subjectName} Paper {exam.paperNumber}</p><p className="mt-0.5 text-xs text-slate-400">{formatDate(exam.examDate)} · {exam.session.replace("_", "/")}</p></div>
+                  </div>
+                ))}
+              </div>
+            ) : <EmptyText icon={CalendarDays} text="No upcoming exams or tasks added yet." />}
+          </Panel>
+
+          <Panel>
+            <SectionHeading eyebrow="Question bank" title="Top topics in Physics" />
+            {physicsTopics.length ? (
+              <div className="mt-4 space-y-4">
+                {physicsTopics.map(([topic, count], index) => (
+                  <div key={topic}>
+                    <div className="flex items-center justify-between text-sm"><span className="font-medium text-slate-600">{topic}</span><span className="text-xs text-slate-400">{count} questions</span></div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-[#0B1F3A]" style={{ width: `${Math.max(14, 100 - index * 17)}%` }} /></div>
+                  </div>
+                ))}
+              </div>
+            ) : <EmptyText icon={Lightbulb} text="Physics topics will appear when questions are available." />}
+          </Panel>
         </section>
       </div>
     </AppLayout>
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-xl bg-[#F8FAFC]/70 px-3 py-2">
-      <div className="text-sm font-bold text-[#0B1F3A]">{value}</div>
-      <div className="text-[11px] font-medium text-gray-500">{label}</div>
-    </div>
-  );
+function getTopPhysicsTopics(questions: Array<{ subjectName: string; topic: string }>) {
+  const counts = new Map<string, number>();
+  questions.filter((question) => /physics/i.test(question.subjectName)).forEach((question) => {
+    const topic = question.topic?.trim();
+    if (topic) counts.set(topic, (counts.get(topic) ?? 0) + 1);
+  });
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
 }
 
-function SnapshotRow({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2.5">
-      <span className="text-sm text-gray-500">{label}</span>
-      <span className="text-sm font-bold text-[#0B1F3A]">{value}</span>
-    </div>
-  );
+function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <section className={`rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/30 sm:p-6 ${className}`}>{children}</section>;
 }
 
-function EmptyPanel({
-  action,
-  body,
-  icon: Icon,
-  title,
-}: {
-  action?: React.ReactNode;
-  body: string;
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-dashed bg-[#F8FAFC]/50 p-8 text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-white text-[#0B1F3A] shadow-sm">
-        <Icon className="h-6 w-6" />
-      </div>
-      <h2 className="font-bold text-[#0B1F3A]">{title}</h2>
-      <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">{body}</p>
-      {action && <div className="mt-4">{action}</div>}
-    </div>
-  );
+function SectionHeading({ eyebrow, title, action }: { eyebrow: string; title: string; action?: React.ReactNode }) {
+  return <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{eyebrow}</p><h2 className="mt-1 text-lg font-semibold text-[#0B1F3A]">{title}</h2></div>{action}</div>;
+}
+
+function MiniMetric({ label, value }: { label: string; value: number }) {
+  return <div className="px-1"><p className="text-sm font-semibold text-[#0B1F3A]">{value}</p><p className="text-[10px] text-slate-400">{label}</p></div>;
+}
+
+function EmptyText({ icon: Icon, text }: { icon: React.ComponentType<{ className?: string }>; text: string }) {
+  return <div className="mt-5 flex flex-col items-center rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center"><Icon className="h-5 w-5 text-slate-300" /><p className="mt-2 text-sm text-slate-400">{text}</p></div>;
+}
+
+function formatRelativeDate(value: string) {
+  const date = new Date(value);
+  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  return formatDate(value);
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value));
+}
+
+function EmptyPanel({ body, icon: Icon, title }: { body: string; icon: React.ComponentType<{ className?: string }>; title: string }) {
+  return <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-white text-[#0B1F3A] shadow-sm"><Icon className="h-5 w-5" /></div><h2 className="mt-3 font-semibold text-[#0B1F3A]">{title}</h2><p className="mx-auto mt-1 max-w-md text-sm text-slate-500">{body}</p></div>;
 }
