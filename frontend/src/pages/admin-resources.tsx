@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/app-layout";
 import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { requireSupabase } from "@/lib/supabase";
+import { useQueryClient } from "@tanstack/react-query";
 import { BookOpen, FileUp, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Redirect } from "wouter";
@@ -44,6 +45,18 @@ type Resource = {
   subjects: { name: string; code: string } | null;
   ai_chunks: Array<{ count: number }>;
 };
+type DeletePreview = {
+  id: number;
+  title: string;
+  originalFilename: string;
+  subjectId: number;
+  subjectName: string;
+  year: number | null;
+  resourceType: ResourceType;
+  indexedQuestions: number;
+  searchableChunks: number;
+  processingJobs: number;
+};
 
 const resourceLabels: Record<ResourceType, string> = {
   PAST_PAPER: "Past paper",
@@ -77,6 +90,7 @@ function normalizeResourceType(value: string): ResourceType {
 
 export default function AdminResources() {
   const { user, isLoading } = useAuth();
+  const queryClient = useQueryClient();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [message, setMessage] = useState("");
@@ -100,6 +114,8 @@ export default function AdminResources() {
   });
   const [filters, setFilters] = useState({ subjectId: "", type: "", year: "" });
   const [editingResource, setEditingResource] = useState<number | null>(null);
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [resourceDraft, setResourceDraft] = useState({
     title: "",
     year: "",
@@ -333,23 +349,39 @@ export default function AdminResources() {
     }
   }
 
-  async function deleteResource(id: number) {
-    if (!window.confirm("Delete this resource and all of its AI chunks?"))
-      return;
-    setBusy(true);
+  async function openDeleteDialog(id: number) {
+    setDeleteLoading(true);
+    setMessage("");
     const client = requireSupabase();
     const { data } = await client.auth.getSession();
-    const response = await fetch(`${API_BASE_URL}/api/resources/${id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${data.session?.access_token}` },
+    const response = await fetch(`${API_BASE_URL}/api/resources/${id}/delete-preview`, {
+      headers: { Authorization: `Bearer ${data.session?.access_token ?? ""}` },
+      cache: "no-store",
     });
+    const body = await response.json() as DeletePreview & { error?: string };
+    setDeleteLoading(false);
+    if (!response.ok) { setMessage(body.error ?? "Could not load deletion details."); return; }
+    setDeletePreview(body);
+  }
+
+  async function deleteResource() {
+    if (!deletePreview) return;
+    const target = deletePreview;
+    setBusy(true);
+    setMessage("");
+    const client = requireSupabase();
+    const { data } = await client.auth.getSession();
+    const response = await fetch(`${API_BASE_URL}/api/resources/${target.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${data.session?.access_token ?? ""}` },
+    });
+    const body = await response.json() as { indexedQuestionsDeleted?: number; chunksDeleted?: number; error?: string };
     setBusy(false);
-    setMessage(
-      response.ok
-        ? "Resource deleted."
-        : ((await response.json()).error ?? "Delete failed."),
-    );
-    if (response.ok) await load();
+    if (!response.ok) { setMessage(body.error ?? "Delete failed."); return; }
+    setResources((current) => current.filter((resource) => resource.id !== target.id));
+    setDeletePreview(null);
+    setMessage(`Permanently deleted ${target.originalFilename}, ${body.indexedQuestionsDeleted ?? target.indexedQuestions} indexed questions, and ${body.chunksDeleted ?? target.searchableChunks} AI chunks.`);
+    await Promise.all([queryClient.invalidateQueries(), load()]);
   }
 
   async function saveResource(id: number) {
@@ -787,7 +819,8 @@ export default function AdminResources() {
                       </button>
                       <button
                         className="rounded-lg border p-2 text-red-600"
-                        onClick={() => deleteResource(resource.id)}
+                        disabled={deleteLoading || busy}
+                        onClick={() => openDeleteDialog(resource.id)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -803,7 +836,31 @@ export default function AdminResources() {
             )}
           </div>
         </section>
+        {deletePreview && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setDeletePreview(null); }}>
+            <div role="dialog" aria-modal="true" aria-labelledby="delete-resource-title" className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-600"><Trash2 className="h-5 w-5" /></div>
+              <h2 id="delete-resource-title" className="mt-4 text-xl font-bold text-[#0B1F3A]">Permanently delete resource?</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">You are about to permanently delete this resource and all indexed questions. This action cannot be undone.</p>
+              <dl className="mt-5 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/60 px-4">
+                <DeleteDetail label="File name" value={deletePreview.originalFilename} />
+                <DeleteDetail label="Subject" value={deletePreview.subjectName} />
+                <DeleteDetail label="Year" value={deletePreview.year?.toString() ?? "General"} />
+                <DeleteDetail label="Resource type" value={resourceLabels[deletePreview.resourceType]} />
+                <DeleteDetail label="Indexed questions" value={deletePreview.indexedQuestions.toString()} emphasize />
+              </dl>
+              <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" disabled={busy} onClick={() => setDeletePreview(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button>
+                <button type="button" disabled={busy} onClick={deleteResource} className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">{busy ? "Deleting permanently…" : "Delete permanently"}</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </AppLayout>
   );
+}
+
+function DeleteDetail({ label, value, emphasize = false }: { label: string; value: string; emphasize?: boolean }) {
+  return <div className="grid grid-cols-[120px_1fr] gap-3 py-3 text-sm"><dt className="text-slate-500">{label}</dt><dd className={`break-all text-right font-medium ${emphasize ? "text-red-600" : "text-[#0B1F3A]"}`}>{value}</dd></div>;
 }

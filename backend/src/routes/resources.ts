@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../middleware/auth";
 import { processResourceById } from "../services/resource-job";
 import { importLegacyPapers } from "../services/legacy-import";
+import { getResourceDeletionPreview, permanentlyDeleteResource } from "../services/resource-deletion";
 
 const router: IRouter = Router();
 
@@ -46,16 +47,29 @@ router.get("/resources/:resourceId/questions", requireAdmin, async (req, res): P
   res.json({ questions: data ?? [] });
 });
 
+router.get("/resources/:resourceId/delete-preview", requireAdmin, async (req, res): Promise<void> => {
+  const resourceId = Number(req.params.resourceId);
+  if (!Number.isInteger(resourceId) || resourceId <= 0) { res.status(400).json({ error: "Invalid resource id." }); return; }
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await getResourceDeletionPreview(res.locals.supabase as SupabaseClient, resourceId));
+  } catch (error) {
+    res.status(404).json({ error: error instanceof Error ? error.message : "Resource not found." });
+  }
+});
+
 router.delete("/resources/:resourceId", requireAdmin, async (req, res): Promise<void> => {
   const client = res.locals.supabase as SupabaseClient;
   const resourceId = Number(req.params.resourceId);
-  const { data: resource, error } = await client.from("resources").select("id,bucket,storage_path").eq("id", resourceId).single();
-  if (error || !resource) { res.status(404).json({ error: "Resource not found." }); return; }
-  const { error: storageError } = await client.storage.from(resource.bucket).remove([resource.storage_path]);
-  if (storageError) { res.status(422).json({ error: storageError.message }); return; }
-  const { error: deleteError } = await client.from("resources").delete().eq("id", resourceId);
-  if (deleteError) { res.status(422).json({ error: deleteError.message }); return; }
-  res.status(204).send();
+  if (!Number.isInteger(resourceId) || resourceId <= 0) { res.status(400).json({ error: "Invalid resource id." }); return; }
+  try {
+    const result = await permanentlyDeleteResource(client, resourceId);
+    req.log.info(result, "Resource permanently deleted");
+    res.json(result);
+  } catch (error) {
+    req.log.error({ resourceId, error }, "Permanent resource deletion failed");
+    res.status(422).json({ error: error instanceof Error ? error.message : "Resource deletion failed." });
+  }
 });
 
 export default router;
