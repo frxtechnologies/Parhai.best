@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createCanvas } from "@napi-rs/canvas";
 import { getDocument, type PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 export type QuestionCrop = {
@@ -89,6 +88,20 @@ export async function createAndStoreQuestionScreenshots(
   buffer: Buffer,
   questions: Array<{ id: number; question_number: string }>,
 ) {
+  if (process.env.ENABLE_QUESTION_SCREENSHOTS !== "true") {
+    if (questions.length) {
+      const { error } = await client.from("question_index")
+        .update({ crop_status: "pending", updated_at: new Date().toISOString() })
+        .eq("resource_id", resource.id);
+      if (error) throw error;
+    }
+    return { screenshots: 0, needsReview: 0, status: "not_generated" as const };
+  }
+
+  // Keep the native canvas package outside the module graph used by Netlify's
+  // queue bundle. It is resolved at runtime only when screenshots are enabled.
+  const nativeCanvasModule = "@napi-rs/canvas";
+  const { createCanvas } = await import(nativeCanvasModule);
   const document = await getDocument({ data: new Uint8Array(buffer) }).promise;
   const detection = await detectQuestionCrops(buffer, questions.map((question) => question.question_number));
   const rows: Array<Record<string, unknown>> = [];

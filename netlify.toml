@@ -8,6 +8,7 @@
 
 [functions]
   node_bundler = "esbuild"
+  external_node_modules = ["@napi-rs/canvas", "@napi-rs/canvas-linux-x64-gnu"]
 
 [functions."process-resource-queue"]
   schedule = "*/10 * * * *"
