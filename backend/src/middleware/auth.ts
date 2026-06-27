@@ -2,13 +2,16 @@ import type { NextFunction, Request, Response } from "express";
 import { createUserClient, getAuthenticatedUser } from "../lib/supabase";
 
 export async function requireUser(req: Request, res: Response, next: NextFunction) {
-  const user = await getAuthenticatedUser(req.header("authorization"));
+  const authorization = req.header("authorization");
+  const accessToken = authorization?.startsWith("Bearer ") ? authorization.slice(7) : null;
+  const user = await getAuthenticatedUser(authorization);
   if (!user) {
     res.status(401).json({ error: "A valid Supabase session is required." });
     return;
   }
 
   res.locals.user = user;
+  res.locals.supabase = createUserClient(accessToken!);
   next();
 }
 

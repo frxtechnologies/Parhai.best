@@ -631,6 +631,7 @@ async function sendAiAssistantMessage(request: AiAssistantRequest): Promise<AiMe
       board: request.board,
       selectedPaperId: request.selectedPaperId ?? null,
       year: request.year ?? null,
+      answerLength: request.answerLength ?? "teacher",
       message: request.message,
       chatHistory: request.chatHistory.slice(-20).map(({ role, content }) => ({ role, content })),
     }),

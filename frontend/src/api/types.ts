@@ -137,6 +137,13 @@ export interface AiSource {
   questionText?: string | null;
   answerText?: string | null;
   sourcePage?: number | null;
+  resourceId?: number | null;
+  variant?: number | null;
+  topic?: string | null;
+  subtopic?: string | null;
+  difficulty?: string | null;
+  marks?: number | null;
+  sourceFile?: string | null;
   reference: string;
 }
 
@@ -233,6 +240,7 @@ export interface AiAssistantRequest {
   paperNumber?: number | null;
   variant?: number | null;
   message: string;
+  answerLength?: "quick" | "teacher" | "full";
   chatHistory: AiMessage[];
 }
 

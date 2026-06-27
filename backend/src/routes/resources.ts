@@ -1,11 +1,22 @@
 import { Router, type IRouter } from "express";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { requireAdmin } from "../middleware/auth";
+import { requireAdmin, requireUser } from "../middleware/auth";
 import { processResourceById } from "../services/resource-job";
 import { importLegacyPapers } from "../services/legacy-import";
 import { getResourceDeletionPreview, permanentlyDeleteResource } from "../services/resource-deletion";
 
 const router: IRouter = Router();
+
+router.get("/resources/:resourceId/view-url", requireUser, async (req, res): Promise<void> => {
+  const client = res.locals.supabase as SupabaseClient;
+  const resourceId = Number(req.params.resourceId);
+  if (!Number.isInteger(resourceId) || resourceId <= 0) { res.status(400).json({ error: "Invalid resource id." }); return; }
+  const { data: resource, error } = await client.from("resources").select("bucket,storage_path,is_approved").eq("id", resourceId).eq("is_approved", true).single();
+  if (error || !resource) { res.status(404).json({ error: "Approved resource not found." }); return; }
+  const { data, error: signError } = await client.storage.from(resource.bucket).createSignedUrl(resource.storage_path, 3600);
+  if (signError || !data?.signedUrl) { res.status(422).json({ error: "The source PDF is currently unavailable." }); return; }
+  res.json({ url: data.signedUrl });
+});
 
 router.post("/resources/import-legacy", requireAdmin, async (req, res): Promise<void> => {
   try {
