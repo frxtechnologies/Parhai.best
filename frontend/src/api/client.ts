@@ -37,6 +37,54 @@ export function requestResourceProcessing(resourceId: number, accessToken: strin
   });
 }
 
+export type ResourceDeletionPreview = {
+  id: number;
+  title: string;
+  originalFilename: string;
+  storagePath: string;
+  subjectId: number;
+  subjectName: string;
+  year: number | null;
+  resourceType: "PAST_PAPER" | "MARKING_SCHEME" | "GRADE_THRESHOLD" | "EXAMINER_REPORT" | "INSERT" | "SOURCE_FILE" | "NOTES" | "WORKSHEET" | "TEST" | "TOPICAL" | "SYLLABUS" | "OTHER";
+  indexedQuestions: number;
+  searchableChunks: number;
+  processingJobs: number;
+};
+
+async function resourceAdminToken() {
+  const { data } = await requireSupabase().auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again before managing resources.");
+  return token;
+}
+
+export async function getResourceDeletionPreview(resourceId: number) {
+  const response = await fetch(`${API_BASE_URL}/api/resources/${resourceId}/delete-preview`, {
+    headers: { Authorization: `Bearer ${await resourceAdminToken()}` },
+    cache: "no-store",
+  });
+  const body = await response.json() as ResourceDeletionPreview & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Could not load deletion details.");
+  return body;
+}
+
+export async function deleteResource(resourceId: number) {
+  const response = await fetch(`${API_BASE_URL}/api/resources/${resourceId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${await resourceAdminToken()}` },
+  });
+  const body = await response.json() as {
+    indexedQuestionsDeleted?: number;
+    chunksDeleted?: number;
+    processingJobsDeleted?: number;
+    legacyQuestionsDeleted?: number;
+    audit?: Record<string, boolean | number>;
+    error?: string;
+  };
+  if (!response.ok) throw new Error(body.error ?? "Permanent resource deletion failed.");
+  return body;
+}
+
 type Level = "O_LEVEL" | "A_LEVEL";
 type PaperSession = "MAY_JUNE" | "OCT_NOV" | "FEB_MAR";
 type PaperType = "PAST_PAPER" | "MARKING_SCHEME";

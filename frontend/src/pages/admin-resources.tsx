@@ -1,5 +1,6 @@
-import { API_BASE_URL, requestResourceProcessing } from "@/api/client";
+import { API_BASE_URL, deleteResource, getResourceDeletionPreview, requestResourceProcessing, type ResourceDeletionPreview } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
+import { BulkAutoImport } from "@/components/admin/bulk-auto-import";
 import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { requireSupabase } from "@/lib/supabase";
@@ -12,6 +13,10 @@ type Level = "O_LEVEL" | "A_LEVEL";
 type ResourceType =
   | "PAST_PAPER"
   | "MARKING_SCHEME"
+  | "GRADE_THRESHOLD"
+  | "EXAMINER_REPORT"
+  | "INSERT"
+  | "SOURCE_FILE"
   | "NOTES"
   | "WORKSHEET"
   | "TEST"
@@ -45,22 +50,14 @@ type Resource = {
   subjects: { name: string; code: string } | null;
   ai_chunks: Array<{ count: number }>;
 };
-type DeletePreview = {
-  id: number;
-  title: string;
-  originalFilename: string;
-  subjectId: number;
-  subjectName: string;
-  year: number | null;
-  resourceType: ResourceType;
-  indexedQuestions: number;
-  searchableChunks: number;
-  processingJobs: number;
-};
 
 const resourceLabels: Record<ResourceType, string> = {
   PAST_PAPER: "Past paper",
   MARKING_SCHEME: "Marking scheme",
+  GRADE_THRESHOLD: "Grade threshold",
+  EXAMINER_REPORT: "Examiner report",
+  INSERT: "Insert",
+  SOURCE_FILE: "Source file",
   NOTES: "Notes",
   WORKSHEET: "Worksheet",
   TEST: "Test",
@@ -79,6 +76,10 @@ function normalizeResourceType(value: string): ResourceType {
     return "PAST_PAPER";
   if (normalized === "MARKING_SCHEME" || normalized === "MARK_SCHEME")
     return "MARKING_SCHEME";
+  if (normalized === "GRADE_THRESHOLD") return "GRADE_THRESHOLD";
+  if (normalized === "EXAMINER_REPORT") return "EXAMINER_REPORT";
+  if (normalized === "INSERT") return "INSERT";
+  if (normalized === "SOURCE_FILE") return "SOURCE_FILE";
   if (normalized === "NOTE" || normalized === "NOTES") return "NOTES";
   if (normalized === "SYLLABUS") return "SYLLABUS";
   if (normalized === "WORKSHEET" || normalized === "WORKSHEETS")
@@ -114,7 +115,7 @@ export default function AdminResources() {
   });
   const [filters, setFilters] = useState({ subjectId: "", type: "", year: "" });
   const [editingResource, setEditingResource] = useState<number | null>(null);
-  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
+  const [deletePreview, setDeletePreview] = useState<ResourceDeletionPreview | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [resourceDraft, setResourceDraft] = useState({
     title: "",
@@ -352,36 +353,27 @@ export default function AdminResources() {
   async function openDeleteDialog(id: number) {
     setDeleteLoading(true);
     setMessage("");
-    const client = requireSupabase();
-    const { data } = await client.auth.getSession();
-    const response = await fetch(`${API_BASE_URL}/api/resources/${id}/delete-preview`, {
-      headers: { Authorization: `Bearer ${data.session?.access_token ?? ""}` },
-      cache: "no-store",
-    });
-    const body = await response.json() as DeletePreview & { error?: string };
-    setDeleteLoading(false);
-    if (!response.ok) { setMessage(body.error ?? "Could not load deletion details."); return; }
-    setDeletePreview(body);
+    try { setDeletePreview(await getResourceDeletionPreview(id)); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not load deletion details."); }
+    finally { setDeleteLoading(false); }
   }
 
-  async function deleteResource() {
+  async function confirmResourceDeletion() {
     if (!deletePreview) return;
     const target = deletePreview;
     setBusy(true);
     setMessage("");
-    const client = requireSupabase();
-    const { data } = await client.auth.getSession();
-    const response = await fetch(`${API_BASE_URL}/api/resources/${target.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${data.session?.access_token ?? ""}` },
-    });
-    const body = await response.json() as { indexedQuestionsDeleted?: number; chunksDeleted?: number; error?: string };
-    setBusy(false);
-    if (!response.ok) { setMessage(body.error ?? "Delete failed."); return; }
-    setResources((current) => current.filter((resource) => resource.id !== target.id));
-    setDeletePreview(null);
-    setMessage(`Permanently deleted ${target.originalFilename}, ${body.indexedQuestionsDeleted ?? target.indexedQuestions} indexed questions, and ${body.chunksDeleted ?? target.searchableChunks} AI chunks.`);
-    await Promise.all([queryClient.invalidateQueries(), load()]);
+    try {
+      const body = await deleteResource(target.id);
+      setResources((current) => current.filter((resource) => resource.id !== target.id));
+      setDeletePreview(null);
+      setMessage(`Permanently deleted ${target.originalFilename}, ${body.indexedQuestionsDeleted ?? target.indexedQuestions} indexed questions, and ${body.chunksDeleted ?? target.searchableChunks} AI chunks. Post-delete audit passed.`);
+      await Promise.all([queryClient.invalidateQueries(), load()]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Permanent resource deletion failed.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveResource(id: number) {
@@ -645,6 +637,7 @@ export default function AdminResources() {
             </form>
           </section>
         </div>
+        <BulkAutoImport subjects={subjects} onImported={async () => { await queryClient.invalidateQueries(); await load(); }} />
         <section className="rounded-2xl border bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b p-6 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -843,15 +836,18 @@ export default function AdminResources() {
               <h2 id="delete-resource-title" className="mt-4 text-xl font-bold text-[#0B1F3A]">Permanently delete resource?</h2>
               <p className="mt-2 text-sm leading-6 text-slate-600">You are about to permanently delete this resource and all indexed questions. This action cannot be undone.</p>
               <dl className="mt-5 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/60 px-4">
-                <DeleteDetail label="File name" value={deletePreview.originalFilename} />
+                <DeleteDetail label="Resource title" value={deletePreview.title} />
+                <DeleteDetail label="Storage path" value={deletePreview.storagePath} />
                 <DeleteDetail label="Subject" value={deletePreview.subjectName} />
                 <DeleteDetail label="Year" value={deletePreview.year?.toString() ?? "General"} />
                 <DeleteDetail label="Resource type" value={resourceLabels[deletePreview.resourceType]} />
                 <DeleteDetail label="Indexed questions" value={deletePreview.indexedQuestions.toString()} emphasize />
+                <DeleteDetail label="AI chunks" value={deletePreview.searchableChunks.toString()} emphasize />
+                <DeleteDetail label="Processing jobs" value={deletePreview.processingJobs.toString()} emphasize />
               </dl>
               <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <button type="button" disabled={busy} onClick={() => setDeletePreview(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button>
-                <button type="button" disabled={busy} onClick={deleteResource} className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">{busy ? "Deleting permanently…" : "Delete permanently"}</button>
+                <button type="button" disabled={busy} onClick={confirmResourceDeletion} className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">{busy ? "Deleting permanently…" : "Delete permanently"}</button>
               </div>
             </div>
           </div>

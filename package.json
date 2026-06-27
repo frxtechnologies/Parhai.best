@@ -18,7 +18,7 @@
     "typecheck": "npm --prefix frontend run typecheck && npm --prefix backend run typecheck",
     "typecheck:frontend": "npm --prefix frontend run typecheck",
     "typecheck:backend": "npm --prefix backend run typecheck",
-    "test": "npm --prefix backend test"
+    "test": "npm --prefix backend test && tsx --test frontend/src/**/*.test.ts"
   },
   "engines": {
     "node": ">=20"

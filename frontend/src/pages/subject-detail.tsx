@@ -19,9 +19,9 @@ import { Link, useParams } from "wouter";
 
 const TABS = ["papers", "schemes", "notes", "worksheets", "tests", "topicals", "questions", "ai", "saved", "progress"] as const;
 type Tab = (typeof TABS)[number];
-type StudyResource = { id: number; title: string; resource_type: "PAST_PAPER" | "MARKING_SCHEME" | "NOTES" | "WORKSHEET" | "TEST" | "TOPICAL" | "SYLLABUS" | "OTHER"; year: number | null; session: string | null; paper_code: string | null; variant: number | null; bucket: string; storage_path: string; status: string; processing_status: string; related_resource_id: number | null };
-const RESOURCE_TYPES: StudyResource["resource_type"][] = ["PAST_PAPER", "MARKING_SCHEME", "NOTES", "WORKSHEET", "TEST", "TOPICAL", "SYLLABUS", "OTHER"];
-const resourceLabel = (type: StudyResource["resource_type"]) => ({ PAST_PAPER: "Past papers", MARKING_SCHEME: "Marking schemes", NOTES: "Notes", WORKSHEET: "Worksheets", TEST: "Tests", TOPICAL: "Topicals", SYLLABUS: "Syllabus", OTHER: "Other resources" })[type];
+type StudyResource = { id: number; title: string; resource_type: "PAST_PAPER" | "MARKING_SCHEME" | "GRADE_THRESHOLD" | "EXAMINER_REPORT" | "INSERT" | "SOURCE_FILE" | "NOTES" | "WORKSHEET" | "TEST" | "TOPICAL" | "SYLLABUS" | "OTHER"; year: number | null; session: string | null; paper_code: string | null; variant: number | null; bucket: string; storage_path: string; status: string; processing_status: string; related_resource_id: number | null };
+const RESOURCE_TYPES: StudyResource["resource_type"][] = ["PAST_PAPER", "MARKING_SCHEME", "GRADE_THRESHOLD", "EXAMINER_REPORT", "INSERT", "SOURCE_FILE", "NOTES", "WORKSHEET", "TEST", "TOPICAL", "SYLLABUS", "OTHER"];
+const resourceLabel = (type: StudyResource["resource_type"]) => ({ PAST_PAPER: "Past papers", MARKING_SCHEME: "Marking schemes", GRADE_THRESHOLD: "Grade thresholds", EXAMINER_REPORT: "Examiner reports", INSERT: "Inserts", SOURCE_FILE: "Source files", NOTES: "Notes", WORKSHEET: "Worksheets", TEST: "Tests", TOPICAL: "Topicals", SYLLABUS: "Syllabus", OTHER: "Other resources" })[type];
 
 export default function SubjectDetail() {
   const params = useParams();
