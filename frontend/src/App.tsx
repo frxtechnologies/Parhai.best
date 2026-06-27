@@ -21,6 +21,7 @@ import PaperTesting from "@/pages/paper-testing";
 import AiAssistantTesting from "@/pages/ai-assistant-testing";
 import AdminResources from "@/pages/admin-resources";
 import AdminProcessing from "@/pages/admin-processing";
+import TopicMapManager from "@/pages/topic-map-manager";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -54,6 +55,7 @@ function Router() {
       <Route path="/admin/ai-testing" component={AiAssistantTesting} />
       <Route path="/admin/resources" component={AdminResources} />
       <Route path="/admin/processing" component={AdminProcessing} />
+      <Route path="/admin/topic-maps" component={TopicMapManager} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -288,7 +288,12 @@ function ChatBubble({ message }: { message: AiMessage }) {
           <div className="mt-3 border-t border-[#0B1F3A]/10 pt-2 text-xs text-gray-500">
             <div className="mb-1 font-semibold text-[#0B1F3A]">Verified sources</div>
             {message.sources.slice(0, 8).map((source) => (
-              <div key={`${source.sourceType}-${source.chunkId}`} className="py-0.5">{source.reference}</div>
+              <div key={`${source.sourceType}-${source.chunkId}`} className="py-1">
+                {source.screenshotUrl && <img src={source.screenshotUrl} alt={`Question ${source.questionNumber ?? ""}`} className="mb-2 max-h-96 w-full rounded-lg border bg-white object-contain" />}
+                {source.questionText && <p className="mb-1 text-gray-600">{source.questionText}</p>}
+                {source.answerText && <p className="mb-1 rounded-md bg-emerald-50 p-2 text-emerald-800"><b>Marking scheme:</b> {source.answerText}</p>}
+                <div>{source.reference}{source.sourcePage ? ` · Page ${source.sourcePage}` : ""}</div>
+              </div>
             ))}
           </div>
         )}

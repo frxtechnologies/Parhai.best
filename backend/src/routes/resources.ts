@@ -41,10 +41,22 @@ router.get("/resources/:resourceId/questions", requireAdmin, async (req, res): P
   const resourceId = Number(req.params.resourceId);
   if (!Number.isInteger(resourceId) || resourceId <= 0) { res.status(400).json({ error: "Invalid resource id." }); return; }
   const { data, error } = await client.from("question_index")
-    .select("id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,source_file")
+    .select("id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,source_file,source_page,bbox,crop_status,question_screenshot_url,question_images(id,image_url,image_path,page_number,bbox,image_order,needs_review)")
     .eq("resource_id", resourceId).order("id");
   if (error) { res.status(422).json({ error: error.message }); return; }
   res.json({ questions: data ?? [] });
+});
+
+router.patch("/questions/:questionId/crop-review", requireAdmin, async (req, res): Promise<void> => {
+  const questionId = Number(req.params.questionId);
+  const status = String(req.body?.status ?? "");
+  if (!Number.isInteger(questionId) || questionId <= 0) { res.status(400).json({ error: "Invalid question id." }); return; }
+  if (!["correct", "incorrect"].includes(status)) { res.status(400).json({ error: "Crop status must be correct or incorrect." }); return; }
+  const client = res.locals.supabase as SupabaseClient;
+  const { data, error } = await client.from("question_index").update({ crop_status: status, updated_at: new Date().toISOString() })
+    .eq("id", questionId).select("id,crop_status").single();
+  if (error) { res.status(422).json({ error: error.message }); return; }
+  res.json(data);
 });
 
 router.get("/resources/:resourceId/delete-preview", requireAdmin, async (req, res): Promise<void> => {

@@ -1,11 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import pdf from "pdf-parse/lib/pdf-parse.js";
-import {
-  classifyQuestions,
-  generateDocumentEmbeddings,
-  AI_EMBEDDING_MODEL,
-} from "../lib/ai-service";
-import { canonicalTopic, fallbackTopicForSubject } from "./rag-utils";
+import { generateDocumentEmbeddings, AI_EMBEDDING_MODEL } from "../lib/ai-service";
+import { createAndStoreQuestionScreenshots } from "./question-screenshots";
+import { tagQuestionsForSubject } from "./topic-tagging";
 
 export type ProcessableResource = {
   id: number;
@@ -179,14 +176,15 @@ export async function processResourceContent(client: SupabaseClient, resource: P
   if (["PAST_PAPER", "WORKSHEET", "TEST", "TOPICAL"].includes(resource.resource_type) && numbered.length) {
     let classified = new Map();
     try {
-      classified = await classifyQuestions(resource.subjects?.name ?? "Subject", numbered.map(({ number, text }) => ({ number, text })));
-      if (classified.size < numbered.length) classificationWarning = `${numbered.length - classified.size} questions used fallback topic tagging because the AI provider was unavailable or rate-limited.`;
+      classified = await tagQuestionsForSubject(client, resource.subjects?.code ?? "", resource.subjects?.name ?? "Subject", numbered);
+      const reviewCount = [...classified.values()].filter((tag) => tag.needsReview).length;
+      if (reviewCount) classificationWarning = `${reviewCount} questions need topic review.`;
     } catch (error) {
       classificationWarning = error instanceof Error ? error.message : "AI topic classification failed.";
     }
     const { error: clearQuestionError } = await client.from("question_index").delete().eq("resource_id", resource.id);
     if (clearQuestionError) throw clearQuestionError;
-    const { error: questionError } = await client.from("question_index").insert(numbered.map((question) => {
+    const { data: savedQuestions, error: questionError } = await client.from("question_index").insert(numbered.map((question) => {
       const tag = classified.get(question.number);
       return {
         subject_id: resource.subject_id,
@@ -196,15 +194,24 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         paper_code: resource.paper_code,
         variant: resource.variant,
         question_number: question.number,
-        topic: tag?.topic ? canonicalTopic(tag.topic) : fallbackTopicForSubject(question.text, resource.subjects?.name ?? "Subject"),
+        topic: tag?.topic ?? "Unclassified",
         subtopic: tag?.subtopic ?? null,
         difficulty: tag?.difficulty ?? "MEDIUM",
         marks: question.marks,
         question_text: question.text,
         source_file: resource.original_filename,
+        syllabus_reference: tag?.syllabusReference ?? null,
+        confidence: tag?.confidence ?? 0,
+        needs_review: tag?.needsReview ?? true,
+        tagging_method: tag?.method ?? "missing_map",
+        tagging_note: tag?.note ?? "No topic map found for this subject.",
       };
-    }));
+    })).select("id,question_number");
     if (questionError) throw questionError;
+    const screenshotResult = await createAndStoreQuestionScreenshots(client, resource, Buffer.from(await file.arrayBuffer()), savedQuestions ?? []);
+    if (screenshotResult.needsReview) {
+      classificationWarning = [classificationWarning, `${screenshotResult.needsReview} question screenshots need crop review.`].filter(Boolean).join(" ");
+    }
     indexedQuestions = numbered.length;
     if (resource.resource_type === "PAST_PAPER") {
       const { data: schemes, error: schemeError } = await client.from("resources").select("extracted_text")

@@ -4,6 +4,7 @@ import aiAssistantRouter from "./ai-assistant";
 import ingestionRouter from "./ingestion";
 import resourcesRouter from "./resources";
 import aiProviderRouter from "./ai-provider";
+import topicMapsRouter from "./topic-maps";
 
 const router: IRouter = Router();
 
@@ -12,5 +13,6 @@ router.use(aiAssistantRouter);
 router.use(ingestionRouter);
 router.use(resourcesRouter);
 router.use(aiProviderRouter);
+router.use(topicMapsRouter);
 
 export default router;

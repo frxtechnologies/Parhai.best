@@ -1,6 +1,7 @@
 import { API_BASE_URL, deleteResource, getResourceDeletionPreview, requestResourceProcessing, type ResourceDeletionPreview } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
 import { BulkAutoImport } from "@/components/admin/bulk-auto-import";
+import { ResourceLibraryManager } from "@/components/admin/resource-library-manager";
 import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { requireSupabase } from "@/lib/supabase";
@@ -39,6 +40,7 @@ type Resource = {
   year: number | null;
   session: string | null;
   paper_code: string | null;
+  paper_number: number | null;
   variant: number | null;
   bucket: string;
   storage_path: string;
@@ -46,6 +48,7 @@ type Resource = {
   status: string;
   processing_status: string;
   processing_error: string | null;
+  import_warning: string | null;
   related_resource_id: number | null;
   subjects: { name: string; code: string } | null;
   ai_chunks: Array<{ count: number }>;
@@ -136,7 +139,7 @@ export default function AdminResources() {
       client
         .from("resources")
         .select(
-          "id,subject_id,level,title,resource_type,year,session,paper_code,variant,bucket,storage_path,original_filename,status,processing_status,processing_error,related_resource_id,subjects(name,code),ai_chunks(count)",
+          "id,subject_id,level,title,resource_type,year,session,paper_code,paper_number,variant,bucket,storage_path,original_filename,status,processing_status,processing_error,import_warning,related_resource_id,subjects(name,code),ai_chunks(count)",
         )
         .order("created_at", { ascending: false }),
     ]);
@@ -638,6 +641,9 @@ export default function AdminResources() {
           </section>
         </div>
         <BulkAutoImport subjects={subjects} onImported={async () => { await queryClient.invalidateQueries(); await load(); }} />
+        <ResourceLibraryManager resources={resources} onOpen={(resource) => openResource(resource as Resource)} onReprocess={processResource} onDelete={openDeleteDialog} busy={busy || deleteLoading} />
+        <details className="rounded-2xl border bg-white">
+          <summary className="cursor-pointer list-none px-5 py-4 text-sm font-semibold text-slate-500">Advanced metadata editor</summary>
         <section className="rounded-2xl border bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b p-6 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -829,6 +835,7 @@ export default function AdminResources() {
             )}
           </div>
         </section>
+        </details>
         {deletePreview && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setDeletePreview(null); }}>
             <div role="dialog" aria-modal="true" aria-labelledby="delete-resource-title" className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">

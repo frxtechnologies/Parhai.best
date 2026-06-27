@@ -9,13 +9,14 @@ export type QuestionClassification = {
 
 const PROVIDERS: AiProvider[] = ["gemini", "xai", "openai", "groq", "openrouter"];
 const provider = (process.env.AI_PROVIDER?.trim().toLowerCase() || "gemini") as AiProvider;
+const sharedModel = process.env.AI_MODEL?.trim();
 
 const providerConfig: Record<AiProvider, { key: string | undefined; keyName: string; baseUrl?: string; model: string }> = {
-  gemini: { key: process.env.GEMINI_API_KEY, keyName: "GEMINI_API_KEY", model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite" },
-  xai: { key: process.env.XAI_API_KEY, keyName: "XAI_API_KEY", baseUrl: "https://api.x.ai/v1", model: process.env.XAI_MODEL ?? "grok-3-mini" },
-  openai: { key: process.env.OPENAI_API_KEY, keyName: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", model: process.env.OPENAI_MODEL ?? process.env.OPENAI_CHAT_MODEL ?? "gpt-4.1-mini" },
-  groq: { key: process.env.GROQ_API_KEY, keyName: "GROQ_API_KEY", baseUrl: "https://api.groq.com/openai/v1", model: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile" },
-  openrouter: { key: process.env.OPENROUTER_API_KEY, keyName: "OPENROUTER_API_KEY", baseUrl: "https://openrouter.ai/api/v1", model: process.env.OPENROUTER_MODEL ?? "openai/gpt-4.1-mini" },
+  gemini: { key: process.env.GEMINI_API_KEY, keyName: "GEMINI_API_KEY", model: sharedModel || process.env.GEMINI_MODEL || "gemini-2.5-flash-lite" },
+  xai: { key: process.env.XAI_API_KEY, keyName: "XAI_API_KEY", baseUrl: "https://api.x.ai/v1", model: sharedModel || process.env.XAI_MODEL || "grok-3-mini" },
+  openai: { key: process.env.OPENAI_API_KEY, keyName: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", model: sharedModel || process.env.OPENAI_MODEL || process.env.OPENAI_CHAT_MODEL || "gpt-4.1-mini" },
+  groq: { key: process.env.GROQ_API_KEY, keyName: "GROQ_API_KEY", baseUrl: "https://api.groq.com/openai/v1", model: sharedModel || process.env.GROQ_MODEL || "llama-3.3-70b-versatile" },
+  openrouter: { key: process.env.OPENROUTER_API_KEY, keyName: "OPENROUTER_API_KEY", baseUrl: "https://openrouter.ai/api/v1", model: sharedModel || process.env.OPENROUTER_MODEL || "openai/gpt-4.1-mini" },
 };
 
 export const AI_EMBEDDING_DIMENSIONS = 768;

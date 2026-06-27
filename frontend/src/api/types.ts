@@ -133,6 +133,10 @@ export interface AiSource {
   session: string | null;
   paperNumber: number | null;
   questionNumber: string | null;
+  screenshotUrl?: string | null;
+  questionText?: string | null;
+  answerText?: string | null;
+  sourcePage?: number | null;
   reference: string;
 }
 

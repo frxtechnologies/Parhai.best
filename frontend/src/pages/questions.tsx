@@ -1,95 +1,18 @@
 import { AppLayout } from "@/components/layout/app-layout";
-import { useListQuestions, getListQuestionsQueryKey } from "@/api/client";
-import { useState } from "react";
-import { Eye, CheckCircle2 } from "lucide-react";
+import { requireSupabase } from "@/lib/supabase";
+import { Eye, CheckCircle2, Shuffle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
-export default function Questions() {
-  const { data: questions, isLoading } = useListQuestions(
-    {},
-    { query: { queryKey: getListQuestionsQueryKey({}) } }
-  );
-  const [revealed, setRevealed] = useState<Record<number, boolean>>({});
+type Question = { id:number; subject_id:number; question_number:string; topic:string; subtopic:string|null; difficulty:string; marks:number|null; question_text:string; answer_text:string|null; year:number|null; session:string|null; paper_code:string|null; variant:number|null; question_screenshot_url:string|null; subjects:{name:string;code:string}|null };
 
-  const toggleReveal = (id: number) => {
-    setRevealed((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  return (
-    <AppLayout>
-      <div className="space-y-8">
-        <header>
-          <h1 className="text-3xl font-bold text-[#0B1F3A] mb-2">Topical Questions</h1>
-          <p className="text-gray-500">Practice questions added in Supabase will appear here by topic.</p>
-        </header>
-
-        {isLoading ? (
-          <div className="p-12 text-center text-gray-400">Loading questions...</div>
-        ) : (
-          <div className="space-y-6">
-            {questions?.map((q) => (
-              <div key={q.id} className="bg-white rounded-xl border overflow-hidden p-6">
-                <div className="flex items-start justify-between mb-4 gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-[#0B1F3A]">{q.subjectName}</span>
-                      <span className="text-sm text-gray-400">• {q.topic}</span>
-                    </div>
-                    <span
-                      className={`inline-block px-2 py-0.5 rounded text-xs font-medium border ${
-                        q.difficulty === "HARD"
-                          ? "bg-red-50 text-red-700 border-red-200"
-                          : q.difficulty === "MEDIUM"
-                          ? "bg-yellow-50 text-yellow-700 border-yellow-200"
-                          : "bg-green-50 text-green-700 border-green-200"
-                      }`}
-                    >
-                      {q.difficulty}
-                    </span>
-                  </div>
-                  <div className="text-sm font-medium bg-gray-100 px-2 py-1 rounded shrink-0">
-                    {q.marks} marks
-                  </div>
-                </div>
-
-                <p className="text-[#0B1F3A] mb-6">{q.question}</p>
-
-                {revealed[q.id] ? (
-                  <div className="bg-green-50/50 border border-green-100 rounded-xl p-5 mt-4 space-y-4">
-                    <div className="flex items-center gap-2 text-green-800 font-semibold mb-2">
-                      <CheckCircle2 className="h-5 w-5" />
-                      <span>Answer Key</span>
-                    </div>
-                    <p className="text-gray-800">{q.answer}</p>
-                    {q.markingPoints.length > 0 && (
-                      <div className="mt-4">
-                        <span className="text-sm font-semibold text-green-800">Marking Points:</span>
-                        <ul className="list-disc pl-5 mt-2 space-y-1 text-sm text-gray-700">
-                          {q.markingPoints.map((pt, i) => (
-                            <li key={i}>{pt}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    <button
-                      onClick={() => toggleReveal(q.id)}
-                      className="mt-4 px-3 py-1.5 border rounded-lg text-sm text-gray-500 hover:bg-gray-50 transition-colors"
-                    >
-                      Hide Answer
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => toggleReveal(q.id)}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#14B8A6]/10 text-[#14B8A6] rounded-lg text-sm font-medium hover:bg-[#14B8A6]/20 transition-colors"
-                  >
-                    <Eye className="h-4 w-4" /> Reveal Answer
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </AppLayout>
-  );
+export default function Questions(){
+  const [questions,setQuestions]=useState<Question[]>([]),[revealed,setRevealed]=useState<Record<number,boolean>>({}),[practice,setPractice]=useState<number[]|null>(null),[error,setError]=useState("");
+  const [filters,setFilters]=useState({subject:"",topic:"",subtopic:"",year:"",session:"",paper:"",variant:""});
+  useEffect(()=>{void requireSupabase().from("question_index").select("id,subject_id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,year,session,paper_code,variant,question_screenshot_url,subjects(name,code)").eq("needs_review",false).order("year",{ascending:false}).limit(1000).then(({data,error})=>{if(error)setError(error.message);else setQuestions((data??[]) as unknown as Question[])})},[]);
+  const filtered=useMemo(()=>questions.filter(q=>(!filters.subject||q.subject_id===Number(filters.subject))&&(!filters.topic||q.topic===filters.topic)&&(!filters.subtopic||q.subtopic===filters.subtopic)&&(!filters.year||q.year===Number(filters.year))&&(!filters.session||q.session===filters.session)&&(!filters.paper||q.paper_code===filters.paper)&&(!filters.variant||q.variant===Number(filters.variant))),[questions,filters]);
+  const visible=practice?filtered.filter(q=>practice.includes(q.id)):filtered;
+  const subjects=[...new Map(questions.map(q=>[q.subject_id,q.subjects])).entries()],topics=[...new Set(questions.filter(q=>!filters.subject||q.subject_id===Number(filters.subject)).map(q=>q.topic))].sort(),subtopics=[...new Set(questions.filter(q=>!filters.topic||q.topic===filters.topic).map(q=>q.subtopic).filter(Boolean) as string[])].sort();
+  const topTopics=Object.entries(filtered.reduce<Record<string,number>>((a,q)=>{a[q.topic]=(a[q.topic]??0)+1;return a},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  function makePractice(){setPractice([...filtered].sort(()=>Math.random()-.5).slice(0,10).map(q=>q.id));setRevealed({})}
+  return <AppLayout><div className="space-y-6"><header className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-bold text-[#0B1F3A]">Topical Questions</h1><p className="text-gray-500">Real processed questions, filtered by Cambridge exam metadata.</p></div><button onClick={makePractice} disabled={!filtered.length} className="inline-flex items-center gap-2 rounded-xl bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"><Shuffle className="h-4 w-4"/>Generate topical practice</button></header>{error&&<p className="rounded-xl bg-red-50 p-3 text-red-700">{error}</p>}<section className="grid gap-2 rounded-2xl border bg-white p-4 sm:grid-cols-2 lg:grid-cols-7">{[["subject","Subject",subjects.map(([id,s])=>[String(id),`${s?.name} ${s?.code}`])],["topic","Topic",topics.map(v=>[v,v])],["subtopic","Subtopic",subtopics.map(v=>[v,v])],["year","Year",[...new Set(questions.map(q=>q.year).filter(Boolean))].sort((a,b)=>Number(b)-Number(a)).map(v=>[String(v),String(v)])],["session","Session",[["OCT_NOV","Oct/Nov"],["MAY_JUNE","May/June"],["FEB_MARCH","Feb/March"]]],["paper","Paper",[...new Set(questions.map(q=>q.paper_code).filter(Boolean) as string[])].sort().map(v=>[v,`Paper ${v}`])],["variant","Variant",[...new Set(questions.map(q=>q.variant).filter(Boolean) as number[])].sort().map(v=>[String(v),`Variant ${v}`])]].map(([key,label,options])=><select key={key as string} className="field-input" value={filters[key as keyof typeof filters]} onChange={e=>{setFilters({...filters,[key as string]:e.target.value});setPractice(null)}}><option value="">All {label as string}</option>{(options as string[][]).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>)}</section>{topTopics.length>0&&<section className="rounded-2xl border bg-white p-4"><h2 className="font-bold text-[#0B1F3A]">Most repeated topics</h2><div className="mt-3 flex flex-wrap gap-2">{topTopics.map(([topic,count])=><button key={topic} onClick={()=>setFilters({...filters,topic})} className="rounded-full bg-teal-50 px-3 py-1.5 text-sm text-teal-700">{topic} · {count}</button>)}</div></section>}<p className="text-sm text-slate-500">{visible.length} questions{practice?" in this practice set":""}</p><div className="space-y-5">{visible.map(q=><article key={q.id} className="overflow-hidden rounded-2xl border bg-white p-5">{q.question_screenshot_url&&<img src={q.question_screenshot_url} alt={`Question ${q.question_number}`} className="mb-4 max-h-[520px] w-full rounded-xl border bg-slate-50 object-contain"/>}<div className="flex flex-wrap justify-between gap-3"><div><b className="text-[#0B1F3A]">{q.subjects?.name} · {q.topic}{q.subtopic?` / ${q.subtopic}`:""}</b><p className="text-xs text-slate-400">{q.year} {q.session?.replace("_"," ")} · Paper {q.paper_code} · Variant {q.variant} · Q{q.question_number}</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs">{q.difficulty} · {q.marks??"—"} marks</span></div><p className="mt-4 whitespace-pre-wrap text-sm text-slate-700">{q.question_text}</p>{revealed[q.id]?<div className="mt-4 rounded-xl bg-emerald-50 p-4"><div className="flex gap-2 font-semibold text-emerald-800"><CheckCircle2 className="h-5 w-5"/>Marking scheme</div><p className="mt-2 text-sm">{q.answer_text??"No linked marking-scheme answer yet."}</p></div>:<button onClick={()=>setRevealed({...revealed,[q.id]:true})} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-teal-50 px-4 py-2 text-sm text-teal-700"><Eye className="h-4 w-4"/>Reveal answer</button>}</article>)}</div></div></AppLayout>
 }

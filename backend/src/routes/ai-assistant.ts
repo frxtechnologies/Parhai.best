@@ -53,7 +53,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     match_threshold: 0.12,
   });
   let indexedQuery = client.from("question_index")
-    .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,source_file,year,session,paper_code,variant,resources!inner(title,is_approved)")
+    .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,question_text,answer_text,question_screenshot_url,source_page,source_file,year,session,paper_code,variant,resources!inner(title,is_approved)")
     .eq("subject_id", subject.id).eq("resources.is_approved", true);
   if (year) indexedQuery = indexedQuery.eq("year", year);
   if (terms.length) indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `question_text.ilike.%${term}%`, `answer_text.ilike.%${term}%`]).join(","));
@@ -83,7 +83,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     paperId: null,
     reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
     content: `Question: ${row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
-    metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
+    metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.marks, questionText: row.question_text, answerText: row.answer_text, screenshotUrl: row.question_screenshot_url, sourcePage: row.source_page, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
   }));
   const seen = new Set<string>();
   const uniqueSources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
@@ -264,7 +264,7 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       ? finalizeGroundedAnswer(answer, retrieved.length, MISSING_SOURCE_MESSAGE)
       : finalizeTeacherAnswer(answer, retrieved.length, mode);
     const cited = new Set(grounded.citedIndexes);
-    const sources = retrieved.flatMap((source, index) => cited.has(index + 1) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, questionNumber: source.metadata.questionNumber ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
+    const sources = retrieved.flatMap((source, index) => cited.has(index + 1) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
     const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: grounded.answer, sources }]);
     if (historyError) throw historyError;
     const { error: logError } = await client.from("ai_chat_logs").insert({ user_id: res.locals.user.id, subject_id: subject.id, user_question: input.message, ai_answer: grounded.answer, sources_used: sources });
