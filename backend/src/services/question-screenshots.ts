@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getDocument, type PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 export type QuestionCrop = {
   questionNumber: string;
@@ -20,13 +19,18 @@ type ResourceScope = {
 };
 
 type Line = { text: string; y: number; height: number };
+type PdfDocument = {
+  numPages: number;
+  getPage(pageNumber: number): Promise<any>;
+  destroy(): Promise<void>;
+};
 const questionPattern = /^(?:question\s+|q\s*)?(\d{1,2})(?:\s*(?:[.):\-]|\([a-z]\)))\s+/i;
 
 function safeSegment(value: unknown, fallback: string) {
   return String(value ?? fallback).replace(/[^a-z0-9_-]+/gi, "-");
 }
 
-async function pageLines(document: PDFDocumentProxy, pageNumber: number) {
+async function pageLines(document: PdfDocument, pageNumber: number) {
   const page = await document.getPage(pageNumber);
   const viewport = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
@@ -44,6 +48,11 @@ async function pageLines(document: PDFDocumentProxy, pageNumber: number) {
 }
 
 export async function detectQuestionCrops(buffer: Buffer, questionNumbers: string[]) {
+  if (process.env.ENABLE_QUESTION_SCREENSHOTS !== "true") {
+    return { crops: [], detected: new Set<string>() };
+  }
+  const pdfRendererModule = "pdfjs-dist/legacy/build/pdf.mjs";
+  const { getDocument } = await import(pdfRendererModule);
   const document = await getDocument({ data: new Uint8Array(buffer) }).promise;
   const wanted = new Set(questionNumbers.map((number) => number.match(/^\d+/)?.[0]).filter(Boolean));
   const starts: Array<{ questionNumber: string; pageNumber: number; y: number; pageHeight: number; pageWidth: number }> = [];
@@ -102,6 +111,8 @@ export async function createAndStoreQuestionScreenshots(
   // queue bundle. It is resolved at runtime only when screenshots are enabled.
   const nativeCanvasModule = "@napi-rs/canvas";
   const { createCanvas } = await import(nativeCanvasModule);
+  const pdfRendererModule = "pdfjs-dist/legacy/build/pdf.mjs";
+  const { getDocument } = await import(pdfRendererModule);
   const document = await getDocument({ data: new Uint8Array(buffer) }).promise;
   const detection = await detectQuestionCrops(buffer, questions.map((question) => question.question_number));
   const rows: Array<Record<string, unknown>> = [];
