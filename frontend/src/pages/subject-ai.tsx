@@ -1,315 +1,37 @@
+import { useClearAiHistory,useGetAiHistory,useGetSubject,useListPapers,useSendAiMessage } from "@/api/client";
+import type { AiMessage } from "@/api/types";
+import { AIErrorCard } from "@/components/ai-tutor/ai-error-card";
+import { AIMessage as MessageCard,AIThinkingState } from "@/components/ai-tutor/ai-message";
+import { ChatComposer } from "@/components/ai-tutor/chat-composer";
+import { StudyContextPanel } from "@/components/ai-tutor/study-context-panel";
 import { AppLayout } from "@/components/layout/app-layout";
+import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
-import {
-  useClearAiHistory,
-  useGetAiHistory,
-  useGetSubject,
-  useListPapers,
-  useSendAiMessage,
-} from "@/api/client";
-import type { AiMessage, Paper } from "@/api/types";
-import { Bot, ImageUp, Send, Sparkles, Trash2, User } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "wouter";
+import { ChevronDown,Filter,PanelRight,ShieldCheck,Sparkles,Trash2,X } from "lucide-react";
+import { useEffect,useMemo,useRef,useState } from "react";
+import { useParams } from "wouter";
 
-const suggestedPrompts = [
-  "Explain this topic like a Cambridge teacher",
-  "Give an examiner-style answer",
-  "Show the marking scheme logic",
-  "Find similar past paper questions",
-  "Make a 10-question quiz from this topic",
-  "Tell me what mistakes students usually make",
-  "Create a revision plan for this topic",
-  "Summarize this paper",
-  "Predict repeated question patterns from past papers",
-];
+const actions=["Explain like a Cambridge teacher","Give examiner-style answer","Show marking scheme logic","Find similar past-paper questions","Generate 10-question quiz","Show repeated topics","Make a topical worksheet"];
+const starters=["Find Light questions from 2020–2024","Explain 5054_w22_qp_11 Question 5","Generate Electricity practice worksheet","Show most repeated Physics topics"];
+const teacher=(name:string)=>/math/i.test(name)?"Cambridge Mathematics Teacher":`Cambridge ${name} Teacher`;
 
-function teacherNameFor(subjectName: string) {
-  if (/math/i.test(subjectName)) return "Cambridge Mathematics Teacher";
-  return `Cambridge ${subjectName} Teacher`;
-}
-
-export default function SubjectAi() {
-  const params = useParams();
-  const subjectId = Number(params.id ?? 0);
-  const { user } = useAuth();
-  const { data: subject, isLoading: isLoadingSubject } = useGetSubject(subjectId);
-  const { data: papers = [] } = useListPapers({ subjectId });
-  const { data: history = [], isLoading: isLoadingHistory } = useGetAiHistory(subjectId);
-  const sendMessage = useSendAiMessage();
-  const clearHistory = useClearAiHistory();
-  const [input, setInput] = useState("");
-  const [selectedPaperId, setSelectedPaperId] = useState("");
-  const [localMessages, setLocalMessages] = useState<AiMessage[]>([]);
-  const endRef = useRef<HTMLDivElement>(null);
-
-  const messages = useMemo(() => [...history, ...localMessages], [history, localMessages]);
-  const selectedPaper = papers.find((paper) => paper.id === Number(selectedPaperId));
-  const teacherName = subject ? teacherNameFor(subject.name) : "Cambridge Teacher";
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sendMessage.isPending]);
-
-  if (isLoadingSubject || isLoadingHistory) {
-    return (
-      <AppLayout>
-        <div className="flex h-[50vh] items-center justify-center text-sm text-gray-500">Loading AI assistant...</div>
-      </AppLayout>
-    );
-  }
-
-  if (!subject || !user) {
-    return (
-      <AppLayout>
-        <div className="rounded-2xl border bg-white p-10 text-center text-gray-500">Subject not found.</div>
-      </AppLayout>
-    );
-  }
-
-  async function handleSend(message = input.trim()) {
-    if (!message || !subject || !user || sendMessage.isPending) return;
-
-    const userMessage: AiMessage = {
-      id: `local-${Date.now()}`,
-      subjectId,
-      role: "user",
-      content: message,
-      createdAt: new Date().toISOString(),
-    };
-
-    setLocalMessages((current) => [...current, userMessage]);
-    setInput("");
-
-    try {
-      const aiMessage = await sendMessage.mutateAsync({
-        userId: user.id,
-        studentName: user.name,
-        level: subject.level,
-        subjectId: subject.id,
-        subjectName: subject.name,
-        subjectCode: subject.code,
-        board: subject.board,
-        selectedPaperId: selectedPaper?.id ?? null,
-        year: selectedPaper?.year ?? null,
-        session: selectedPaper?.session ?? null,
-        paperNumber: selectedPaper?.paperNumber ?? null,
-        variant: selectedPaper?.variant ?? null,
-        message,
-        chatHistory: messages,
-      });
-      setLocalMessages((current) => [...current, aiMessage]);
-    } catch {
-      setLocalMessages((current) => current.filter((item) => item.id !== userMessage.id));
-    }
-  }
-
-  async function handleClear() {
-    if (!user) return;
-    setLocalMessages([]);
-    await clearHistory.mutateAsync({ userId: user.id, subjectId });
-  }
-
-  return (
-    <AppLayout>
-      <div className="flex min-h-[calc(100vh-8rem)] flex-col gap-5">
-        <header className="flex flex-col gap-4 rounded-2xl border bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[#0B1F3A]">
-              <Sparkles className="h-4 w-4" />
-              Subject Teacher
-            </div>
-            <h1 className="text-2xl font-bold text-[#0B1F3A]">{teacherName}</h1>
-            <p className="mt-1 text-sm text-gray-500">
-              Locked to {subject.name} ({subject.code}) · Cambridge teaching with verified Parhai evidence.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <select value={selectedPaperId} onChange={(event) => setSelectedPaperId(event.target.value)} className="field-input min-w-64">
-              <option value="">All uploaded papers for this subject</option>
-              {papers.map((paper) => (
-                <option key={paper.id} value={paper.id}>
-                  {paper.year} {paper.session.replace("_", " ")} P{paper.paperNumber}
-                  {paper.variant ? ` v${paper.variant}` : ""}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleClear}
-              disabled={clearHistory.isPending || messages.length === 0}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
-            >
-              <Trash2 className="h-4 w-4" />
-              Clear
-            </button>
-          </div>
-        </header>
-
-        <div className="grid flex-1 gap-5 lg:grid-cols-[1fr_320px]">
-          <section className="flex min-h-[560px] flex-col overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="flex-1 overflow-y-auto p-5">
-              {messages.length === 0 ? (
-                <div className="flex h-full items-center justify-center text-center">
-                  <div className="max-w-md">
-                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F8FAFC] text-[#0B1F3A]">
-                      <Bot className="h-7 w-7" />
-                    </div>
-                    <h2 className="text-xl font-bold text-[#0B1F3A]">Ask your {teacherName}</h2>
-                    <p className="mt-2 text-sm text-gray-500">
-                      Learn concepts, revise chapters, practise exam technique, or search real uploaded papers and marking schemes.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {messages.map((message) => (
-                    <ChatBubble key={message.id} message={message} />
-                  ))}
-                </div>
-              )}
-
-              {sendMessage.isPending && (
-                <div className="mt-4 flex gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#06B6D4]/10 text-[#06B6D4]">
-                    <Bot className="h-4 w-4" />
-                  </div>
-                  <div className="rounded-2xl rounded-tl-none border bg-gray-50 px-4 py-3 text-sm text-gray-500">
-                    Preparing a subject-locked Cambridge answer...
-                  </div>
-                </div>
-              )}
-              <div ref={endRef} />
-            </div>
-
-            {sendMessage.error && (
-              <div className="border-t bg-red-50 px-5 py-3 text-sm text-red-700">{sendMessage.error.message}</div>
-            )}
-
-            <div className="border-t p-4">
-              <div className="mb-3 flex flex-wrap gap-2">
-                {suggestedPrompts.slice(0, 5).map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => setInput(prompt)}
-                    className="rounded-full bg-[#F8FAFC] px-3 py-1.5 text-xs font-semibold text-[#0B1F3A] transition-colors hover:bg-[#E0F7FA]"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-3">
-                <textarea
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      handleSend();
-                    }
-                  }}
-                  placeholder={`Ask your ${teacherName} about a concept, revision, or past paper...`}
-                  rows={2}
-                  className="flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none focus:border-[#0B1F3A] focus:bg-white focus:ring-4 focus:ring-[#0B1F3A]/10"
-                />
-                <button
-                  onClick={() => handleSend()}
-                  disabled={!input.trim() || sendMessage.isPending}
-                  className="rounded-xl bg-[#0B1F3A] px-4 py-3 text-white transition-colors hover:bg-[#08162B] disabled:opacity-50"
-                >
-                  <Send className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <aside className="space-y-5">
-            <div className="rounded-2xl border bg-white p-5 shadow-sm">
-              <h2 className="font-bold text-[#0B1F3A]">Teacher Scope</h2>
-              <div className="mt-4 space-y-3 text-sm text-gray-600">
-                <p>Level: {subject.level === "O_LEVEL" ? "O Level" : "A Level"}</p>
-                <p>Subject: {subject.name}</p>
-                <p>Code: {subject.code}</p>
-                <p>Board: {subject.board}</p>
-                <p>Paper filter: {selectedPaper ? `${selectedPaper.year} P${selectedPaper.paperNumber}` : "All subject papers"}</p>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border bg-white p-5 shadow-sm">
-              <div className="mb-3 flex items-center gap-2 font-bold text-[#0B1F3A]">
-                <ImageUp className="h-5 w-5 text-[#14B8A6]" />
-                Image Question
-              </div>
-              <div className="rounded-xl border border-dashed bg-gray-50 p-5 text-center text-sm text-gray-500">
-                Image upload UI is prepared. OCR and image-question backend are pending.
-              </div>
-            </div>
-
-            <div className="rounded-2xl border bg-white p-5 shadow-sm">
-              <h2 className="font-bold text-[#0B1F3A]">More prompts</h2>
-              <div className="mt-3 space-y-2">
-                {suggestedPrompts.slice(5).map((prompt) => (
-                  <button
-                    key={prompt}
-                    onClick={() => setInput(prompt)}
-                    className="block w-full rounded-xl bg-gray-50 px-3 py-2 text-left text-sm text-gray-600 transition-colors hover:bg-[#F8FAFC] hover:text-[#0B1F3A]"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <Link href={`/subject/${subject.id}`} className="block rounded-xl border bg-white px-4 py-3 text-center text-sm font-semibold text-[#0B1F3A]">
-              Back to subject workspace
-            </Link>
-          </aside>
-        </div>
-      </div>
-    </AppLayout>
-  );
-}
-
-function ChatBubble({ message }: { message: AiMessage }) {
-  const isUser = message.role === "user";
-  return (
-    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
-      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${isUser ? "bg-[#0B1F3A] text-white" : "bg-[#06B6D4]/10 text-[#06B6D4]"}`}>
-        {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-      </div>
-      <div
-        className={`max-w-[82%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-          isUser ? "rounded-tr-none bg-[#0B1F3A] text-white" : "rounded-tl-none border bg-gray-50 text-[#0B1F3A]"
-        }`}
-      >
-        {isUser ? message.content : <FormattedAnswer content={message.content} />}
-        {!isUser && message.sources && message.sources.length > 0 && (
-          <div className="mt-3 border-t border-[#0B1F3A]/10 pt-2 text-xs text-gray-500">
-            <div className="mb-1 font-semibold text-[#0B1F3A]">Verified sources</div>
-            {message.sources.slice(0, 8).map((source) => (
-              <div key={`${source.sourceType}-${source.chunkId}`} className="py-1">
-                {source.screenshotUrl && <img src={source.screenshotUrl} alt={`Question ${source.questionNumber ?? ""}`} className="mb-2 max-h-96 w-full rounded-lg border bg-white object-contain" />}
-                {source.questionText && <p className="mb-1 text-gray-600">{source.questionText}</p>}
-                {source.answerText && <p className="mb-1 rounded-md bg-emerald-50 p-2 text-emerald-800"><b>Marking scheme:</b> {source.answerText}</p>}
-                <div>{source.reference}{source.sourcePage ? ` · Page ${source.sourcePage}` : ""}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function FormattedAnswer({ content }: { content: string }) {
-  return <div className="space-y-2">{content.split(/\n+/).filter(Boolean).map((line, index) => {
-    const value = line.trim();
-    const heading = value.match(/^#{1,4}\s+(.+)$/);
-    if (heading) return <h3 key={index} className="pt-2 font-bold text-[#0B1F3A]">{heading[1]}</h3>;
-    if (/^-\s+/.test(value)) return <div key={index} className="flex gap-2"><span aria-hidden>•</span><span>{value.replace(/^-\s+/, "")}</span></div>;
-    if (/^[-•]\s+/.test(value)) return <div key={index} className="flex gap-2"><span aria-hidden>•</span><span>{value.replace(/^[-•]\s+/, "")}</span></div>;
-    if (/^(?:answer|explanation|steps?|key points?|exam-style answer):?$/i.test(value)) return <div key={index} className="font-bold text-[#0B1F3A]">{value.replace(/:$/, "")}</div>;
-    return <p key={index}>{value}</p>;
-  })}</div>;
+export default function SubjectAi(){
+  const subjectId=Number(useParams().id??0),{user}=useAuth(),admin=isAdminEmail(user?.email);
+  const {data:subject,isLoading}=useGetSubject(subjectId),{data:papers=[]}=useListPapers({subjectId}),{data:history=[],isLoading:historyLoading}=useGetAiHistory(subjectId);
+  const send=useSendAiMessage(),clear=useClearAiHistory();
+  const [input,setInput]=useState(""),[paperId,setPaperId]=useState(""),[local,setLocal]=useState<AiMessage[]>([]),[failed,setFailed]=useState<{message:string;error:string}|null>(null),[drawer,setDrawer]=useState(false);
+  const end=useRef<HTMLDivElement>(null),messages=useMemo(()=>[...history,...local],[history,local]),paper=papers.find(p=>p.id===Number(paperId)),latest=[...messages].reverse().find(m=>m.role==="assistant"),name=subject?teacher(subject.name):"Cambridge Teacher";
+  useEffect(()=>end.current?.scrollIntoView({behavior:"smooth"}),[messages,send.isPending]);
+  if(isLoading||historyLoading)return <AppLayout><div className="p-12 text-center text-slate-400">Preparing your AI workspace…</div></AppLayout>;
+  if(!subject||!user)return <AppLayout><div className="p-12 text-center">Subject not found.</div></AppLayout>;
+  async function submit(text=input.trim()){if(!text||send.isPending)return;const userMessage:AiMessage={id:`local-${Date.now()}`,subjectId,role:"user",content:text,createdAt:new Date().toISOString()};setLocal(c=>[...c,userMessage]);setInput("");setFailed(null);try{const answer=await send.mutateAsync({userId:user!.id,studentName:user!.name,level:subject!.level,subjectId,subjectName:subject!.name,subjectCode:subject!.code,board:subject!.board,selectedPaperId:paper?.id??null,year:paper?.year??null,session:paper?.session??null,paperNumber:paper?.paperNumber??null,variant:paper?.variant??null,message:text,chatHistory:messages});setLocal(c=>[...c,answer])}catch(e){const error=e instanceof Error?e.message:"AI request failed.";setInput(text);setFailed({message:text,error})}}
+  function sourcesOnly(){const sources=latest?.sources??[];setLocal(c=>[...c,{id:`sources-${Date.now()}`,subjectId,role:"assistant",content:sources.length?`I could not generate a full AI answer, but I kept ${sources.length} verified source${sources.length===1?"":"s"} available in the study context panel.`:"The provider is unavailable and no verified sources were returned for this request yet.",sources,createdAt:new Date().toISOString()}]);setFailed(null)}
+  return <AppLayout><div className="-m-4 min-h-[calc(100vh-3.5rem)] bg-slate-50 sm:-m-6 md:min-h-screen">
+    <header className="sticky top-0 z-30 border-b bg-white/90 px-4 py-3 backdrop-blur md:top-0"><div className="mx-auto flex max-w-[1500px] items-center justify-between gap-3"><div><div className="flex items-center gap-2"><h1 className="text-lg font-bold text-[#0B1F3A]">AI Tutor</h1><span className="rounded-full bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-700">AI Online</span>{admin&&<span className="hidden rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-500 sm:inline">Provider debug in AI Testing</span>}</div><p className="text-xs text-slate-500">{subject.name} {subject.code} · Cambridge Teacher</p></div><div className="flex gap-2"><button onClick={()=>setDrawer(true)} className="rounded-lg border p-2 lg:hidden"><PanelRight className="h-4 w-4"/></button><button onClick={()=>{setLocal([]);void clear.mutateAsync({userId:user.id,subjectId})}} disabled={!messages.length} className="rounded-lg border p-2 text-slate-500 disabled:opacity-30" title="Clear conversation"><Trash2 className="h-4 w-4"/></button></div></div></header>
+    <div className="mx-auto grid max-w-[1500px] lg:grid-cols-[minmax(0,1fr)_340px]"><main className="flex min-h-[calc(100vh-70px)] flex-col border-r border-slate-200"><div className="border-b bg-white px-4 py-3"><div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2"><Filter className="h-4 w-4 text-slate-400"/><select value={paperId} onChange={e=>setPaperId(e.target.value)} className="rounded-lg border bg-white px-3 py-2 text-xs"><option value="">All {subject.name} papers</option>{papers.map(p=><option key={p.id} value={p.id}>{p.year} {p.session.replace("_"," ")} · P{p.paperNumber} · V{p.variant??"—"}</option>)}</select><button className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs text-slate-500">More filters <ChevronDown className="h-3 w-3"/></button></div></div>
+      <div className="flex-1 overflow-y-auto px-4 py-8 sm:px-6"><div className="mx-auto max-w-4xl">{!messages.length?<div className="mx-auto max-w-2xl py-12 text-center"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0B1F3A] text-white shadow-lg"><Sparkles className="h-6 w-6"/></div><h2 className="mt-5 text-2xl font-bold text-[#0B1F3A]">Ask your {name}</h2><p className="mt-2 text-slate-500">Search past papers, understand marking schemes, generate topical practice, and revise smarter.</p><div className="mt-8 grid gap-3 sm:grid-cols-2">{starters.map(s=><button key={s} onClick={()=>setInput(s)} className="rounded-2xl border bg-white p-4 text-left text-sm font-medium text-[#0B1F3A] shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md">{s}</button>)}</div></div>:<div className="space-y-6">{messages.map(m=><MessageCard key={m.id} message={m}/>)}</div>}{send.isPending&&<div className="mt-6"><AIThinkingState/></div>}{failed&&<div className="mt-6"><AIErrorCard error={failed.error} onRetry={()=>submit(failed.message)} onSourcesOnly={sourcesOnly} isAdmin={admin}/></div>}<div ref={end}/></div></div>
+      <div className="px-4"><div className="mx-auto flex max-w-4xl gap-2 overflow-x-auto pb-1">{actions.map(a=><button key={a} onClick={()=>setInput(a)} className="shrink-0 rounded-full border bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-teal-300 hover:text-teal-700">{a}</button>)}</div></div><ChatComposer value={input} onChange={setInput} onSend={()=>submit()} pending={send.isPending} placeholder={`Ask your ${name} about a concept, revision, or past paper…`}/>
+    </main><div className="hidden p-4 lg:block"><StudyContextPanel subject={subject} paper={paper} sources={latest?.sources??[]}/></div></div>
+    {drawer&&<div className="fixed inset-0 z-50 lg:hidden"><button aria-label="Close study context" onClick={()=>setDrawer(false)} className="absolute inset-0 bg-slate-950/30"/><div className="absolute right-0 top-0 h-full w-[min(90vw,380px)] overflow-y-auto bg-slate-50 p-4 shadow-2xl"><div className="mb-4 flex items-center justify-between"><b>Study context</b><button onClick={()=>setDrawer(false)} className="rounded-lg border p-2"><X className="h-4 w-4"/></button></div><StudyContextPanel subject={subject} paper={paper} sources={latest?.sources??[]}/>{admin&&<a href="/admin/ai-testing" className="mt-4 flex items-center gap-2 rounded-xl border bg-white p-3 text-sm font-semibold"><ShieldCheck className="h-4 w-4"/>Admin AI diagnostics</a>}</div></div>}
+  </div></AppLayout>
 }
