@@ -34,6 +34,7 @@ export async function tagQuestionsForSubject(
   subjectCode: string,
   subjectName: string,
   questions: TaggableQuestion[],
+  options: { useAi?: boolean } = {},
 ) {
   const { data, error } = await client.from("topic_maps")
     .select("topic,subtopic,syllabus_reference,keywords")
@@ -72,7 +73,7 @@ export async function tagQuestionsForSubject(
     }
   }
 
-  if (aiCandidates.length) {
+  if (aiCandidates.length && options.useAi !== false) {
     const allowed = maps.map((row) => `${row.topic}${row.subtopic ? ` / ${row.subtopic}` : ""}${row.syllabus_reference ? ` (${row.syllabus_reference})` : ""}`).join("; ");
     const classified = await classifyQuestions(`${subjectName} (${subjectCode}). Choose only from this approved topic map: ${allowed}`, aiCandidates.map(({ number, text }) => ({ number, text })));
     for (const question of aiCandidates) {
