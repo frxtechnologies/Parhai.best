@@ -30,7 +30,24 @@ export async function processResourceById(client: SupabaseClient, resourceId: nu
       if (indexingError) throw indexingError;
     });
     const completedAt = new Date().toISOString();
-    const { error: updateError } = await client.from("resources").update({ extracted_text: result.extractedText, status: "processed", processing_status: "processed", processing_error: result.classificationWarning, updated_at: completedAt }).eq("id", resourceId);
+    const topicStatus = result.indexedQuestions
+      ? result.classificationWarning ? "needs_review" : "classified"
+      : "not_applicable";
+    const linkStatus = resource.resource_type === "MARKING_SCHEME"
+      ? result.linkedAnswers > 0 ? "linked" : "not_linked"
+      : resource.resource_type === "PAST_PAPER" ? "paper_indexed" : "not_applicable";
+    const { error: updateError } = await client.from("resources").update({
+      extracted_text: result.extractedText,
+      extracted_text_length: result.extractedText.length,
+      detected_question_count: result.indexedQuestions,
+      saved_question_count: result.indexedQuestions,
+      topic_tagging_status: topicStatus,
+      marking_scheme_link_status: linkStatus,
+      status: "processed",
+      processing_status: "processed",
+      processing_error: result.classificationWarning,
+      updated_at: completedAt,
+    }).eq("id", resourceId);
     if (updateError) throw updateError;
     const { error: completeJobError } = await client.from("processing_jobs").update({ status: "completed", error_message: result.classificationWarning, completed_at: completedAt, updated_at: completedAt }).eq("id", jobId);
     if (completeJobError) throw completeJobError;

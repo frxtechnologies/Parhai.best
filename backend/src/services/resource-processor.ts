@@ -54,7 +54,18 @@ export function splitResourceChunks(text: string, maxLength = 1400, overlap = 18
 
 function readMarks(text: string) {
   const matches = [...text.matchAll(/(?:\[|\()\s*(\d{1,2})\s*(?:marks?)?\s*(?:\]|\))/gi)];
-  return matches.length ? Number(matches[matches.length - 1]![1]) : null;
+  return matches.length ? matches.reduce((total, match) => total + Number(match[1]), 0) : null;
+}
+
+export function cleanQuestionText(text: string) {
+  return text
+    .replace(/\b(?:DO NOT WRITE IN THIS MARGIN|TURN OVER|BLANK PAGE|UCLES|Cambridge University Press & Assessment)\b/gi, " ")
+    .replace(/\.{5,}/g, " ")
+    .replace(/[^\S\r\n]+/g, " ")
+    .replace(/\n\s*\n\s*\n+/g, "\n\n")
+    .replace(/[^\p{L}\p{N}\s()[\].,;:?!+\-=/°%'"£$]/gu, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 export function splitNumberedQuestions(text: string): IndexedQuestion[] {
@@ -132,8 +143,14 @@ async function linkAnswerRows(client: SupabaseClient, paperResourceId: number, a
 }
 
 export async function processResourceContent(client: SupabaseClient, resource: ProcessableResource, onExtracted?: () => Promise<void>) {
+  if (!resource.bucket?.trim() || !resource.storage_path?.trim()) {
+    throw new Error(`Storage configuration is incomplete for resource ${resource.id}: bucket or file path is missing.`);
+  }
   const { data: file, error: downloadError } = await client.storage.from(resource.bucket).download(resource.storage_path);
-  if (downloadError || !file) throw downloadError ?? new Error("Resource file was not found in Supabase Storage.");
+  if (downloadError || !file) {
+    const reason = downloadError?.message === "Object not found" ? "file was not found" : "download failed";
+    throw new Error(`Supabase Storage ${reason} for resource ${resource.id} (${resource.bucket}/${resource.storage_path}).`);
+  }
   const extractedText = await extractFileText(resource, Buffer.from(await file.arrayBuffer()));
   if (!extractedText) throw new Error("No text was extracted. This appears to be a scanned PDF and OCR is needed before it can be processed.");
   await onExtracted?.();
@@ -172,8 +189,12 @@ export async function processResourceContent(client: SupabaseClient, resource: P
   let linkedAnswers = 0;
   let classificationWarning: string | null = null;
   const numbered = splitNumberedQuestions(extractedText);
+  const questionBearing = ["PAST_PAPER", "WORKSHEET", "TEST", "TOPICAL"].includes(resource.resource_type);
+  if (questionBearing && numbered.length === 0) {
+    throw new Error("Question extraction failed: text was extracted, but no numbered questions were detected. Review the PDF or run OCR.");
+  }
 
-  if (["PAST_PAPER", "WORKSHEET", "TEST", "TOPICAL"].includes(resource.resource_type) && numbered.length) {
+  if (questionBearing && numbered.length) {
     let classified = new Map();
     try {
       classified = await tagQuestionsForSubject(client, resource.subjects?.code ?? "", resource.subjects?.name ?? "Subject", numbered);
@@ -198,13 +219,18 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         subtopic: tag?.subtopic ?? null,
         difficulty: tag?.difficulty ?? "MEDIUM",
         marks: question.marks,
-        question_text: question.text,
+        total_marks: question.marks,
+        raw_extracted_text: question.text,
+        clean_question_text: cleanQuestionText(question.text),
+        display_question_text: cleanQuestionText(question.text),
+        question_text: cleanQuestionText(question.text),
         source_file: resource.original_filename,
         syllabus_reference: tag?.syllabusReference ?? null,
         confidence: tag?.confidence ?? 0,
         needs_review: tag?.needsReview ?? true,
         tagging_method: tag?.method ?? "missing_map",
         tagging_note: tag?.note ?? "No topic map found for this subject.",
+        topic_classified: Boolean(tag && !tag.needsReview && tag.confidence >= 0.85),
       };
     })).select("id,question_number");
     if (questionError) throw questionError;

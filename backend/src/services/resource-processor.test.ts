@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { splitNumberedQuestions } from "./resource-processor";
+import { cleanQuestionText, splitNumberedQuestions } from "./resource-processor";
 
 test("splits numbered questions and subparts without inventing content", () => {
   const rows = splitNumberedQuestions(`
@@ -18,4 +18,13 @@ test("merges repeated question headers into one database row", () => {
   const rows = splitNumberedQuestions("1 First page wording. [2]\n2 Another question. [1]\n1 Continued diagram wording.");
   assert.deepEqual(rows.map((row) => row.number), ["1", "2"]);
   assert.match(rows[0]!.text, /First page wording.*Continued diagram wording/);
+});
+
+test("sums every mark token in a combined question", () => {
+  const rows = splitNumberedQuestions("1 (a) State the law. [2] (b) Calculate the value. [3] (c) Explain. [2] (d) Name the unit. [1]");
+  assert.equal(rows[0]?.marks, 8);
+});
+
+test("removes PDF boilerplate and dotted answer-line garbage", () => {
+  assert.equal(cleanQuestionText("DO NOT WRITE IN THIS MARGIN Explain refraction. ................................ UCLES TURN OVER"), "Explain refraction.");
 });

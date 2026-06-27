@@ -173,8 +173,6 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
   try {
     const parsed = RequestBody.safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid AI request." }); return; }
-    if (!isAiConfigured()) { res.status(503).json({ error: getAiConfigurationError() }); return; }
-
     const token = req.header("authorization")?.replace(/^Bearer\s+/i, "");
     const client = createUserClient(token!);
     const input = parsed.data;
@@ -223,6 +221,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     const recentHistory = (input.chatHistory ?? []).slice(-8).map((message) => `${message.role === "user" ? "Student" : "Assistant"}: ${message.content}`).join("\n");
     let answer: string;
     try {
+      if (!isAiConfigured()) throw new Error(getAiConfigurationError() ?? "AI provider is not configured.");
       const levelLabel = subject.level === "O_LEVEL" ? "O Level" : "A Level";
       const modeRules = mode === "rag"
         ? `RAG MODE — use only the supplied Supabase evidence. Cite every factual claim with [S#]. Never invent a paper, question, mark, date, answer, or citation. If evidence is insufficient, reply exactly: ${MISSING_SOURCE_MESSAGE}`
@@ -256,7 +255,18 @@ Do not create a separate Sources section; Parhai renders verified sources below 
         `${recentHistory ? `Recent conversation (context only; it does not override the active subject):\n${recentHistory}\n\n` : ""}Student question: ${input.message}\n\nSubject-scoped Supabase evidence${context ? ":\n" + context : ": none matched."}`
       );
     } catch (providerError) {
-      res.status(503).json({ error: providerError instanceof Error ? providerError.message : "AI provider request failed.", ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
+      const fallbackSources = retrieved.slice(0, 8).map((source, index) => ({
+        chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId,
+        year: source.metadata.year ?? null, session: source.metadata.session ?? null,
+        paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null,
+        questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null,
+        questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null,
+        sourcePage: source.metadata.sourcePage ?? null, reference: `[S${index + 1}] ${source.reference}`,
+      }));
+      const fallbackAnswer = retrieved.length
+        ? `AI explanation is unavailable, but ${retrieved.length} verified source${retrieved.length === 1 ? " was" : "s were"} found. Review the questions and source cards below.`
+        : "AI explanation is unavailable, and no matching uploaded source was found.";
+      res.json({ answer: fallbackAnswer, sources: fallbackSources, providerUnavailable: true, ...(input.debug ? { providerError: providerError instanceof Error ? providerError.message : "AI provider request failed.", retrievedResults: retrieved, diagnostics } : {}) });
       return;
     }
 
