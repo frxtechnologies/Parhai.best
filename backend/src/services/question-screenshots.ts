@@ -10,6 +10,7 @@ export type QuestionCrop = {
 
 type ResourceScope = {
   id: number;
+  subject_id?: number;
   level: string;
   year: number | null;
   session: string | null;
@@ -17,6 +18,17 @@ type ResourceScope = {
   variant: number | null;
   subjects: { code: string } | null;
 };
+export type ScreenshotQuestion = { id: number; question_number: string };
+export type ScreenshotMode = "off" | "pre_generate" | "on_demand" | "hybrid_cache";
+
+export function screenshotMode(): ScreenshotMode {
+  const mode = process.env.SCREENSHOT_MODE;
+  return mode === "off" || mode === "pre_generate" || mode === "hybrid_cache" ? mode : "on_demand";
+}
+
+export function screenshotsEnabled() {
+  return screenshotMode() !== "off";
+}
 
 type Line = { text: string; y: number; height: number };
 type PdfDocument = {
@@ -24,7 +36,10 @@ type PdfDocument = {
   getPage(pageNumber: number): Promise<any>;
   destroy(): Promise<void>;
 };
-const questionPattern = /^(?:question\s+|q\s*)?(\d{1,2})(?:\s*(?:[.):\-]|\([a-z]\)))\s+/i;
+// Cambridge structured papers commonly start a question with either `1.`,
+// `1 (a)`, or simply `1 A student...`. The lookahead keeps bare page numbers
+// and footer numbers from matching unless question text follows on that line.
+const questionPattern = /^(?:question\s+|q\s*)?(\d{1,2})(?:\s*(?:[.):\-]|\([a-z]\))\s+|(?=\s+[A-Za-z([]))/i;
 
 function safeSegment(value: unknown, fallback: string) {
   return String(value ?? fallback).replace(/[^a-z0-9_-]+/gi, "-");
@@ -48,7 +63,7 @@ async function pageLines(document: PdfDocument, pageNumber: number) {
 }
 
 export async function detectQuestionCrops(buffer: Buffer, questionNumbers: string[]) {
-  if (process.env.ENABLE_QUESTION_SCREENSHOTS !== "true") {
+  if (!screenshotsEnabled()) {
     return { crops: [], detected: new Set<string>() };
   }
   const pdfRendererModule = "pdfjs-dist/legacy/build/pdf.mjs";
@@ -95,12 +110,12 @@ export async function createAndStoreQuestionScreenshots(
   client: SupabaseClient,
   resource: ResourceScope,
   buffer: Buffer,
-  questions: Array<{ id: number; question_number: string }>,
+  questions: ScreenshotQuestion[],
 ) {
-  if (process.env.ENABLE_QUESTION_SCREENSHOTS !== "true") {
+  if (!screenshotsEnabled() || !["pre_generate", "hybrid_cache"].includes(screenshotMode())) {
     if (questions.length) {
       const { error } = await client.from("question_index")
-        .update({ crop_status: "pending", updated_at: new Date().toISOString() })
+        .update({ screenshot_status: "not_generated", updated_at: new Date().toISOString() })
         .eq("resource_id", resource.id);
       if (error) throw error;
     }
@@ -118,7 +133,9 @@ export async function createAndStoreQuestionScreenshots(
   const rows: Array<Record<string, unknown>> = [];
   const bucket = "question-screenshots";
 
+  let failed = 0;
   for (const question of questions) {
+    try {
     let crops = detection.crops.filter((crop) => crop.questionNumber === question.question_number);
     if (!crops.length) {
       const page = Math.min(Math.max(1, Number(question.question_number.match(/^\d+/)?.[0]) || 1), document.numPages);
@@ -165,14 +182,180 @@ export async function createAndStoreQuestionScreenshots(
         needs_review: crop.needsReview,
       });
     }
+    } catch {
+      failed += 1;
+      await client.from("question_index").update({
+        screenshot_status: "failed",
+        updated_at: new Date().toISOString(),
+      }).eq("id", question.id);
+    }
   }
   await document.destroy();
 
-  const { error: clearError } = await client.from("question_images").delete().eq("resource_id", resource.id);
+  const questionIds = questions.map((question) => question.id);
+  const { error: clearError } = await client.from("question_images").delete().in("question_id", questionIds);
   if (clearError) throw clearError;
   if (rows.length) {
     const { error: insertError } = await client.from("question_images").insert(rows);
     if (insertError) throw insertError;
   }
-  return { screenshots: rows.length, needsReview: rows.filter((row) => row.needs_review).length };
+  return {
+    screenshots: rows.length,
+    generated: rows.filter((row) => !row.needs_review).length,
+    fullPageFallbacks: rows.filter((row) => row.needs_review).length,
+    failed,
+    needsReview: rows.filter((row) => row.needs_review).length,
+  };
+}
+
+type Bbox = { x: number; y: number; width: number; height: number };
+
+function validBox(value: unknown): value is Bbox {
+  if (!value || typeof value !== "object") return false;
+  const box = value as Partial<Bbox>;
+  return [box.x, box.y, box.width, box.height].every(Number.isFinite)
+    && Number(box.width) > 10 && Number(box.height) > 10;
+}
+
+export async function renderQuestionPreview(client: SupabaseClient, questionId: number) {
+  if (!screenshotsEnabled()) throw new Error("Question previews are disabled.");
+  const { data: question, error } = await client.from("question_index")
+    .select("id,resource_id,question_number,source_page,bbox,screenshot_status,question_screenshot_url,question_screenshot_path,resources!inner(bucket,storage_path)")
+    .eq("id", questionId).single();
+  if (error || !question) throw new Error(error?.message ?? "Question not found.");
+
+  const mode = screenshotMode();
+  if (mode === "hybrid_cache" && question.question_screenshot_path) {
+    const { data, error: cachedError } = await client.storage.from("question-screenshots").download(question.question_screenshot_path);
+    if (!cachedError && data) {
+      const buffer = Buffer.from(await data.arrayBuffer());
+      return {
+        buffer, status: "generated" as const, cached: true,
+        pageNumber: question.source_page ?? 1, bbox: validBox(question.bbox) ? question.bbox : null,
+        outputSize: buffer.length, nonBlankRatio: null, resourcePath: "hybrid-cache",
+      };
+    }
+  }
+
+  const resource = Array.isArray(question.resources) ? question.resources[0] : question.resources;
+  if (!resource) throw new Error("Question source PDF is missing.");
+  const { data: pdfFile, error: downloadError } = await client.storage.from(resource.bucket).download(resource.storage_path);
+  if (downloadError || !pdfFile) throw new Error(downloadError?.message ?? "Could not download source PDF.");
+
+  const nativeCanvasModule = "@napi-rs/canvas";
+  const { createCanvas } = await import(nativeCanvasModule);
+  const pdfRendererModule = "pdfjs-dist/legacy/build/pdf.mjs";
+  const { getDocument } = await import(pdfRendererModule);
+  const pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
+  let inferredCrop: QuestionCrop | null = null;
+  const metadataNeedsDetection = !question.source_page
+    || question.screenshot_status === "full_page_fallback"
+    || question.screenshot_status === "failed";
+  if (metadataNeedsDetection) {
+    const detection = await detectQuestionCrops(pdfBuffer, [question.question_number]);
+    inferredCrop = detection.crops[0] ?? null;
+  }
+  if (metadataNeedsDetection && !inferredCrop && !question.source_page) {
+    await client.from("question_index").update({ screenshot_status: "failed", updated_at: new Date().toISOString() }).eq("id", question.id);
+    throw new Error("Preview crop failed: source_page is missing and the question heading was not found.");
+  }
+  const document = await getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
+  const scale = 1.6;
+  const resolvedBox = inferredCrop?.bbox ?? (validBox(question.bbox) ? question.bbox : null);
+  const exact = validBox(resolvedBox);
+  const requestedPage = Math.min(Math.max(1, inferredCrop?.pageNumber ?? question.source_page ?? 1), document.numPages);
+  const attempts = [
+    { page: requestedPage, box: exact ? resolvedBox as Bbox : null, fallback: !exact },
+    ...(exact ? [{ page: requestedPage, box: null, fallback: true }] : []),
+    { page: requestedPage - 1, box: null, fallback: true },
+    { page: requestedPage + 1, box: null, fallback: true },
+  ].filter((attempt, index, all) => attempt.page >= 1 && attempt.page <= document.numPages
+    && all.findIndex((candidate) => candidate.page === attempt.page && Boolean(candidate.box) === Boolean(attempt.box)) === index);
+
+  let buffer: Buffer | null = null;
+  let pageNumber = requestedPage;
+  let usedBox: Bbox | null = null;
+  let status: "generated" | "full_page_fallback" = "full_page_fallback";
+  let nonBlankRatio = 0;
+  for (const attempt of attempts) {
+    const page = await document.getPage(attempt.page);
+    const viewport = page.getViewport({ scale });
+    const pageCanvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    await page.render({ canvasContext: pageCanvas.getContext("2d") as never, viewport, canvas: pageCanvas as never }).promise;
+    const sourceBox = attempt.box ?? { x: 0, y: 0, width: viewport.width / scale, height: viewport.height / scale };
+    const x = Math.max(0, Math.floor(sourceBox.x * scale));
+    const y = Math.max(0, Math.floor(sourceBox.y * scale));
+    const width = Math.min(pageCanvas.width - x, Math.ceil(sourceBox.width * scale));
+    const height = Math.min(pageCanvas.height - y, Math.ceil(sourceBox.height * scale));
+    if (width < 20 || height < 20) continue;
+    const output = createCanvas(width, height);
+    const context = output.getContext("2d");
+    context.drawImage(pageCanvas, x, y, width, height, 0, 0, width, height);
+    const pixels = context.getImageData(0, 0, width, height).data;
+    let ink = 0;
+    const step = Math.max(4, Math.floor(pixels.length / 160000 / 4) * 4);
+    let sampled = 0;
+    for (let offset = 0; offset < pixels.length; offset += step) {
+      sampled += 1;
+      if (pixels[offset] < 242 || pixels[offset + 1] < 242 || pixels[offset + 2] < 242) ink += 1;
+    }
+    nonBlankRatio = sampled ? ink / sampled : 0;
+    if (nonBlankRatio < 0.004) continue;
+    buffer = output.toBuffer("image/png");
+    pageNumber = attempt.page;
+    usedBox = attempt.box;
+    status = attempt.fallback ? "full_page_fallback" : "generated";
+    break;
+  }
+  await document.destroy();
+  if (!buffer) {
+    await client.from("question_index").update({ screenshot_status: "failed", updated_at: new Date().toISOString() }).eq("id", question.id);
+    throw new Error("Preview crop failed: source page, crop, and nearby pages were blank.");
+  }
+  await client.from("question_index").update({ screenshot_status: status, updated_at: new Date().toISOString() }).eq("id", question.id);
+
+  if (mode === "hybrid_cache") {
+    const path = `on-demand/${question.resource_id}/q-${safeSegment(question.question_number, String(question.id))}.png`;
+    const { error: uploadError } = await client.storage.from("question-screenshots")
+      .upload(path, buffer, { contentType: "image/png", upsert: true, cacheControl: "86400" });
+    if (!uploadError) {
+      const { data: publicUrl } = client.storage.from("question-screenshots").getPublicUrl(path);
+      await client.from("question_index").update({
+        question_screenshot_path: path, question_screenshot_url: publicUrl.publicUrl,
+        screenshot_status: status, updated_at: new Date().toISOString(),
+      }).eq("id", question.id);
+    }
+  }
+  return {
+    buffer, status, cached: false, pageNumber, bbox: usedBox,
+    outputSize: buffer.length, nonBlankRatio, resourcePath: resource.storage_path,
+  };
+}
+
+export async function generateScreenshotsForResource(
+  client: SupabaseClient,
+  resourceId: number,
+  questionId?: number,
+) {
+  const { data: resource, error: resourceError } = await client.from("resources")
+    .select("id,subject_id,level,year,session,paper_code,variant,bucket,storage_path")
+    .eq("id", resourceId).single();
+  if (resourceError || !resource) throw new Error(resourceError?.message ?? "Resource not found.");
+  const { data: subject, error: subjectError } = await client.from("subjects")
+    .select("code").eq("id", resource.subject_id).single();
+  if (subjectError || !subject) throw new Error(subjectError?.message ?? "Subject not found.");
+  let query = client.from("question_index").select("id,question_number").eq("resource_id", resourceId);
+  if (questionId) query = query.eq("id", questionId);
+  const { data: questions, error: questionError } = await query;
+  if (questionError) throw questionError;
+  if (!questions?.length) throw new Error("No indexed questions found.");
+  await client.from("question_index").update({ screenshot_status: "pending" }).in("id", questions.map((q) => q.id));
+  const { data: file, error: downloadError } = await client.storage.from(resource.bucket).download(resource.storage_path);
+  if (downloadError || !file) throw new Error(downloadError?.message ?? "Could not download source PDF.");
+  return createAndStoreQuestionScreenshots(
+    client,
+    { ...resource, subjects: subject } as unknown as ResourceScope,
+    Buffer.from(await file.arrayBuffer()),
+    questions,
+  );
 }

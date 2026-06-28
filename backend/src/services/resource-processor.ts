@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import pdf from "pdf-parse/lib/pdf-parse.js";
 import { generateDocumentEmbeddings, AI_EMBEDDING_MODEL } from "../lib/ai-service";
-import { createAndStoreQuestionScreenshots } from "./question-screenshots";
+import { createAndStoreQuestionScreenshots, screenshotMode } from "./question-screenshots";
 import { tagQuestionsForSubject } from "./topic-tagging";
 
 export type ProcessableResource = {
@@ -234,9 +234,16 @@ export async function processResourceContent(client: SupabaseClient, resource: P
       };
     })).select("id,question_number");
     if (questionError) throw questionError;
-    const screenshotResult = await createAndStoreQuestionScreenshots(client, resource, Buffer.from(await file.arrayBuffer()), savedQuestions ?? []);
-    if (screenshotResult.needsReview) {
-      classificationWarning = [classificationWarning, `${screenshotResult.needsReview} question screenshots need crop review.`].filter(Boolean).join(" ");
+    try {
+      if (screenshotMode() !== "pre_generate") {
+        await client.from("question_index").update({ screenshot_status: "not_generated" }).eq("resource_id", resource.id);
+      } else {
+      const screenshotResult = await createAndStoreQuestionScreenshots(client, resource, Buffer.from(await file.arrayBuffer()), savedQuestions ?? []);
+      if (screenshotResult.needsReview) classificationWarning = [classificationWarning, `${screenshotResult.needsReview} question screenshots need crop review.`].filter(Boolean).join(" ");
+      }
+    } catch (error) {
+      await client.from("question_index").update({ screenshot_status: "failed" }).eq("resource_id", resource.id);
+      classificationWarning = [classificationWarning, `Question screenshots failed without blocking indexing: ${error instanceof Error ? error.message : "unknown renderer error"}`].filter(Boolean).join(" ");
     }
     indexedQuestions = numbered.length;
     if (resource.resource_type === "PAST_PAPER") {

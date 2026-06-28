@@ -134,6 +134,9 @@ export interface AiSource {
   paperNumber: number | null;
   questionNumber: string | null;
   screenshotUrl?: string | null;
+  screenshotStatus?: string | null;
+  bbox?: { x: number; y: number; width: number; height: number } | null;
+  filePath?: string | null;
   questionText?: string | null;
   answerText?: string | null;
   sourcePage?: number | null;

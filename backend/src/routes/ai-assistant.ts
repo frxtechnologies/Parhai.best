@@ -6,6 +6,7 @@ import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 import { expandSearchTerms, finalizeGroundedAnswer, formatCitation, rankEvidence } from "../services/rag-utils";
 import { assistantModeFor, cambridgeTeacherName, finalizeTeacherAnswer, requestedOutsideSubject } from "../services/teacher-mode";
+import { screenshotMode } from "../services/question-screenshots";
 
 const router: IRouter = Router();
 const MISSING_SOURCE_MESSAGE = "I could not find this in the uploaded papers yet.";
@@ -33,6 +34,26 @@ type SourceResult = {
   metadata: Record<string, unknown>;
 };
 
+function normalizedQuestionKey(source: SourceResult) {
+  const text = String(source.metadata.questionText ?? source.content)
+    .toLowerCase().replace(/\[[0-9]+\]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const words = text.split(" ").filter(Boolean).slice(0, 45).join(" ");
+  return [words, source.metadata.topic ?? "", source.metadata.subtopic ?? "", source.metadata.marks ?? ""].join("|");
+}
+
+function deduplicateQuestions(sources: SourceResult[]) {
+  const seen = new Set<string>();
+  const unique: SourceResult[] = [];
+  let removed = 0;
+  for (const source of sources) {
+    const key = normalizedQuestionKey(source);
+    if (seen.has(key)) { removed += 1; continue; }
+    seen.add(key);
+    unique.push(source);
+  }
+  return { unique, removed };
+}
+
 async function retrieveResourceSources(client: SupabaseClient, input: z.infer<typeof RequestBody>, subject: { id: number; name: string; code: string }) {
   const { year, yearFrom, yearTo, paperNumber, session, difficulty, terms } = getFilters(input.message, input.year);
   let resourcesQuery = client.from("resources")
@@ -47,7 +68,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   if (terms.length) chunksQuery = chunksQuery.or(terms.slice(0, 3).map((term) => `content.ilike.%${term}%`).join(","));
 
   let indexedQuery = client.from("question_index")
-    .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,total_marks,display_question_text,question_text,answer_text,question_screenshot_url,source_page,source_file,year,session,paper_code,variant,resources!inner(id,title,bucket,storage_path,related_resource_id,is_approved)")
+    .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,total_marks,display_question_text,question_text,answer_text,question_screenshot_url,screenshot_status,source_page,bbox,source_file,year,session,paper_code,variant,resources!inner(id,title,bucket,storage_path,related_resource_id,is_approved)")
     .eq("subject_id", subject.id).eq("resources.is_approved", true);
   if (year) indexedQuery = indexedQuery.eq("year", year);
   if (yearFrom) indexedQuery = indexedQuery.gte("year", yearFrom);
@@ -90,14 +111,16 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     content: chunk.content.slice(0, 5000),
     metadata: { ...chunk.metadata, resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, similarity: chunk.similarity },
     }));
-  const questionSources: SourceResult[] = (indexed.data ?? []).map((row) => ({
+  const rawQuestionSources: SourceResult[] = (indexed.data ?? []).map((row) => ({
     sourceType: "question",
     id: row.id,
     paperId: null,
     reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
     content: `Question: ${row.display_question_text ?? row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
-    metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.total_marks ?? row.marks, questionText: row.display_question_text ?? row.question_text, answerText: row.answer_text, screenshotUrl: row.question_screenshot_url, sourcePage: row.source_page, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
+    metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.total_marks ?? row.marks, questionText: row.display_question_text ?? row.question_text, answerText: row.answer_text, screenshotUrl: screenshotMode() === "on_demand" ? null : row.question_screenshot_url, screenshotStatus: screenshotMode() === "on_demand" ? "not_generated" : row.screenshot_status, sourcePage: row.source_page, bbox: row.bbox, filePath: (Array.isArray(row.resources) ? row.resources[0] : row.resources)?.storage_path, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
   }));
+  const deduplicated = deduplicateQuestions(rawQuestionSources);
+  const questionSources = deduplicated.unique;
   const seen = new Set<string>();
   const uniqueSources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
     const key = `${source.sourceType}:${source.id}`;
@@ -106,7 +129,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     return true;
   });
   const sources = rankEvidence(uniqueSources, terms, 12);
-  return { resources: resources.data ?? [], sources, indexedQuestionCount: indexed.data?.length ?? 0 };
+  return { resources: resources.data ?? [], sources, indexedQuestionCount: indexed.data?.length ?? 0, duplicatesRemoved: deduplicated.removed };
 }
 
 function getFilters(message: string, explicitYear?: number | null) {
@@ -214,6 +237,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
       matchedResources: resourceRetrieval.resources,
       matchedChunks: resourceRetrieval.sources.length,
       indexedQuestions: resourceRetrieval.indexedQuestionCount,
+      duplicatesRemoved: resourceRetrieval.duplicatesRemoved,
       matchedPapers: legacyRetrieval.matchedPapers,
       extractedQuestionCount: legacyRetrieval.extractedQuestionCount,
       matchedQuestionRows: legacyRetrieval.matchedQuestions,
@@ -290,12 +314,15 @@ Do not create a separate Sources section; Parhai renders verified sources below 
         sourcePage: source.metadata.sourcePage ?? null, reference: `[S${index + 1}] ${source.reference}`,
         resourceId: source.metadata.resourceId ?? null, topic: source.metadata.topic ?? null,
         subtopic: source.metadata.subtopic ?? null, difficulty: source.metadata.difficulty ?? null,
-        marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null,
+        marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null,
       }));
+      const resultSummary = questionListRequest
+        ? `Found ${resourceRetrieval.indexedQuestionCount} matching questions. Removed ${resourceRetrieval.duplicatesRemoved} repeated/similar questions. Showing the best ${fallbackSources.length}.`
+        : "";
       const fallbackAnswer = retrieved.length
         ? `AI explanation is unavailable, but ${retrieved.length} verified source${retrieved.length === 1 ? " was" : "s were"} found. Review the questions and source cards below.`
         : "AI explanation is unavailable, and no matching uploaded source was found.";
-      res.json({ answer: fallbackAnswer, sources: fallbackSources, providerUnavailable: true, ...(input.debug ? { providerError: providerError instanceof Error ? providerError.message : "AI provider request failed.", retrievedResults: retrieved, diagnostics } : {}) });
+      res.json({ answer: [resultSummary, fallbackAnswer].filter(Boolean).join("\n\n"), sources: fallbackSources, providerUnavailable: true, ...(input.debug ? { providerError: providerError instanceof Error ? providerError.message : "AI provider request failed.", retrievedResults: retrieved, diagnostics } : {}) });
       return;
     }
 
@@ -303,13 +330,16 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       ? finalizeGroundedAnswer(answer, retrieved.length, MISSING_SOURCE_MESSAGE)
       : finalizeTeacherAnswer(answer, retrieved.length, mode);
     const cited = new Set(grounded.citedIndexes);
-    const sources = retrieved.flatMap((source, index) => (cited.has(index + 1) || (questionListRequest && source.sourceType === "question")) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, resourceId: source.metadata.resourceId ?? null, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, variant: source.metadata.variant ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, topic: source.metadata.topic ?? null, subtopic: source.metadata.subtopic ?? null, difficulty: source.metadata.difficulty ?? null, marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
+    const sources = retrieved.flatMap((source, index) => (cited.has(index + 1) || (questionListRequest && source.sourceType === "question")) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, resourceId: source.metadata.resourceId ?? null, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, variant: source.metadata.variant ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null, topic: source.metadata.topic ?? null, subtopic: source.metadata.subtopic ?? null, difficulty: source.metadata.difficulty ?? null, marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
     const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: grounded.answer, sources }]);
     if (historyError) throw historyError;
     const { error: logError } = await client.from("ai_chat_logs").insert({ user_id: res.locals.user.id, subject_id: subject.id, user_question: input.message, ai_answer: grounded.answer, sources_used: sources });
     if (logError) req.log.warn({ logError }, "Could not save AI audit log");
 
-    res.json({ answer: grounded.answer, sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
+    const resultSummary = questionListRequest
+      ? `Found ${resourceRetrieval.indexedQuestionCount} matching questions. Removed ${resourceRetrieval.duplicatesRemoved} repeated/similar questions. Showing the best ${sources.filter((source) => source.sourceType === "question").length}.`
+      : "";
+    res.json({ answer: [resultSummary, grounded.answer].filter(Boolean).join("\n\n"), sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
     req.log.error({ error }, "AI assistant request failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "AI assistant request failed." });

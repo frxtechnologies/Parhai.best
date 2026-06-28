@@ -43,6 +43,7 @@ type IndexedQuestion = {
   answer_text: string | null;
   source_page: number | null;
   crop_status: string;
+  screenshot_status: string;
   question_screenshot_url: string | null;
   question_images: Array<{
     id: number;
@@ -179,6 +180,25 @@ export default function AdminProcessing() {
     setMessage(`Question crop marked ${status}.`);
   }
 
+  async function generateScreenshots(resourceId: number, questionId?: number) {
+    setBusy(questionId ?? resourceId);
+    const response = await fetch(questionId
+      ? `${API_BASE_URL}/api/questions/${questionId}/screenshot`
+      : `${API_BASE_URL}/api/resources/${resourceId}/screenshots`, {
+      method: "POST", headers: await authHeader(),
+    });
+    const body = await response.json() as { screenshots?: number; failed?: number; fullPageFallbacks?: number; error?: string };
+    setMessage(response.ok
+      ? `Screenshots: ${body.screenshots ?? 0} saved, ${body.fullPageFallbacks ?? 0} full-page fallbacks, ${body.failed ?? 0} failed.`
+      : body.error ?? "Screenshot generation failed.");
+    setBusy(null);
+    if (response.ok) {
+      setQuestions((current) => { const next = { ...current }; delete next[resourceId]; return next; });
+      await viewQuestions(resourceId);
+      await load();
+    }
+  }
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -257,6 +277,10 @@ export default function AdminProcessing() {
                     </details>
                   </div>
                   <div className="flex gap-2">
+                    <button disabled={busy === resource.id} onClick={() => generateScreenshots(resource.id)}
+                      className="rounded-lg border border-teal-200 px-3 py-2 text-sm font-semibold text-teal-700 disabled:opacity-50">
+                      Generate screenshots
+                    </button>
                     <button
                       onClick={() => viewQuestions(resource.id)}
                       className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
@@ -276,6 +300,13 @@ export default function AdminProcessing() {
                 </div>
                 {open && (
                   <div className="mt-4 space-y-3 border-t pt-4">
+                    <div className="grid gap-2 sm:grid-cols-4">
+                      {["generated", "failed", "pending", "full_page_fallback"].map((status) => (
+                        <div key={status} className="rounded-lg bg-slate-50 p-2 text-xs">
+                          <b>{open.filter((q) => q.screenshot_status === status).length}</b> {status.replace(/_/g, " ")}
+                        </div>
+                      ))}
+                    </div>
                     {open.map((question) => (
                       <details
                         key={question.id}
@@ -363,10 +394,11 @@ export default function AdminProcessing() {
                                 Mark incorrect
                               </button>
                               <button
-                                onClick={() => retry(resource.id)}
+                                disabled={busy === question.id}
+                                onClick={() => generateScreenshots(resource.id, question.id)}
                                 className="rounded-lg border px-3 py-2 text-xs font-semibold"
                               >
-                                Reprocess question
+                                Regenerate screenshot
                               </button>
                             </div>
                           </div>
