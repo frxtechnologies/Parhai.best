@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "wouter";
+import { friendlyResourceName, friendlySession } from "@/lib/exam-resource-library";
 
 const TABS = ["papers", "schemes", "notes", "worksheets", "tests", "topicals", "questions", "ai", "saved", "progress"] as const;
 type Tab = (typeof TABS)[number];
@@ -104,11 +105,11 @@ export default function SubjectDetail() {
         <section className="space-y-5">
           <div><h2 className="text-2xl font-bold text-[#0B1F3A]">Study resources</h2><p className="text-sm text-gray-500">Everything uploaded for this subject, organised by resource type.</p></div>
           {resourceError&&<p className="rounded-xl bg-red-50 p-3 text-sm text-red-600">{resourceError}</p>}
-          <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {RESOURCE_TYPES.map((type) => {
               const items = resources.filter((resource) => resource.resource_type === type);
               const label = resourceLabel(type);
-              return <div key={type} className="rounded-2xl border bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><h3 className="font-bold text-[#0B1F3A]">{label}</h3><span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-gray-500">{items.length}</span></div><div className="space-y-3">{items.map((resource)=><button key={resource.id} onClick={()=>openStudyResource(resource)} className="block w-full rounded-xl border p-3 text-left transition-colors hover:border-[#14B8A6] hover:bg-cyan-50/40"><p className="font-semibold text-[#0B1F3A]">{resource.title}</p><p className="mt-1 text-xs text-gray-500">{resource.year??"General"}{resource.session?` · ${resource.session.replace("_"," ")}`:""}{resource.paper_code?` · ${resource.paper_code}`:""}{resource.variant?` v${resource.variant}`:""}</p></button>)}{!items.length&&<p className="rounded-xl border border-dashed p-4 text-center text-sm text-gray-400">No {label.toLowerCase()} yet.</p>}</div></div>;
+              return <div key={type} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200"><div className="flex items-center justify-between"><div><h3 className="font-bold text-[#0B1F3A]">{label}</h3><p className="mt-1 text-xs text-slate-400">{items.length ? `${items.length} available` : "Nothing uploaded yet"}</p></div><span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-700">{items.length}</span></div></div>;
             })}
           </div>
         </section>
@@ -146,7 +147,7 @@ export default function SubjectDetail() {
         </div>
 
         {activeTab === "papers" && (
-          <PaperGroups papers={questionPapers} markingSchemes={markSchemes} onOpen={openStudyResource} />
+          <PaperGroups subjectName={subject.name} papers={questionPapers} markingSchemes={markSchemes} onOpen={openStudyResource} />
         )}
 
         {activeTab === "schemes" && (
@@ -295,14 +296,14 @@ export default function SubjectDetail() {
   );
 }
 
-function PaperGroups({ papers, markingSchemes, onOpen }: { papers: StudyResource[]; markingSchemes: StudyResource[]; onOpen: (resource: StudyResource) => void }) {
+function PaperGroups({ subjectName, papers, markingSchemes, onOpen }: { subjectName: string; papers: StudyResource[]; markingSchemes: StudyResource[]; onOpen: (resource: StudyResource) => void }) {
   const groups = new Map<string, StudyResource[]>();
   for (const paper of papers) {
-    const key = `${paper.year ?? "General"} · ${paper.session?.replace("_", " ") ?? "No session"}`;
+    const key = `${paper.year ?? "General"} · ${friendlySession(paper.session)}`;
     groups.set(key, [...(groups.get(key) ?? []), paper]);
   }
   if (!papers.length) return <div className="rounded-xl border bg-white p-12 text-center text-gray-400">No papers available yet</div>;
-  return <div className="space-y-5">{[...groups.entries()].map(([group, rows]) => <section key={group} className="overflow-hidden rounded-xl border bg-white"><h3 className="border-b bg-slate-50 px-5 py-3 font-bold text-[#0B1F3A]">{group}</h3><div className="divide-y">{rows.sort((a,b)=>(a.paper_code??"").localeCompare(b.paper_code??"") || (a.variant??0)-(b.variant??0)).map((paper)=>{const scheme=markingSchemes.find((item)=>item.related_resource_id===paper.id);return <div key={paper.id} className="flex flex-wrap items-center gap-3 p-4"><FileText className="h-5 w-5 text-gray-400"/><div className="min-w-0 flex-1"><p className="truncate font-semibold text-[#0B1F3A]">{paper.title}</p><p className="text-sm text-gray-400">{paper.paper_code??"No paper code"}{paper.variant?` · v${paper.variant}`:""} · {paper.status}</p></div><button onClick={()=>onOpen(paper)} className="rounded-lg border px-3 py-2 text-sm">Question paper</button>{scheme?<button onClick={()=>onOpen(scheme)} className="rounded-lg bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">Marking scheme</button>:<span className="text-xs text-gray-400">No marking scheme linked</span>}</div>})}</div></section>)}</div>;
+  return <div className="space-y-5">{[...groups.entries()].map(([group, rows]) => <section key={group} className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200"><div className="mb-3 flex items-center justify-between"><h3 className="font-bold text-[#0B1F3A]">{group}</h3><span className="text-xs text-slate-400">{rows.length} papers</span></div><div className="grid gap-3 lg:grid-cols-2">{rows.sort((a,b)=>(a.paper_code??"").localeCompare(b.paper_code??"") || (a.variant??0)-(b.variant??0)).map((paper)=>{const scheme=markingSchemes.find((item)=>item.related_resource_id===paper.id);return <article key={paper.id} className="rounded-xl bg-slate-50/80 p-4 transition hover:bg-teal-50/50"><div className="flex items-start gap-3"><span className="rounded-lg bg-white p-2 text-teal-700 shadow-sm"><FileText className="h-5 w-5"/></span><div className="min-w-0 flex-1"><p className="font-semibold text-[#0B1F3A]">{friendlyResourceName(paper,subjectName)}</p><p className="mt-1 text-xs capitalize text-slate-500">{paper.processing_status==="processed"?"Ready to study":paper.processing_status.replace(/_/g," ")}</p></div></div><div className="mt-4 flex flex-wrap gap-2"><button onClick={()=>onOpen(paper)} className="rounded-lg bg-[#0B1F3A] px-3 py-2 text-xs font-semibold text-white">Open paper</button>{scheme?<button onClick={()=>onOpen(scheme)} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-slate-200">Mark scheme</button>:<span className="self-center text-xs text-slate-400">Mark scheme unavailable</span>}</div></article>})}</div></section>)}</div>;
 }
 
 function StudyResourceList({
@@ -321,10 +322,9 @@ function StudyResourceList({
           <div key={resource.id} className="p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-gray-50 transition-colors">
             <FileText className="h-5 w-5 text-gray-400 shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="font-semibold text-[#0B1F3A] truncate">{resource.title}</div>
+              <div className="font-semibold text-[#0B1F3A]">{friendlyResourceName(resource)}</div>
               <div className="text-sm text-gray-400">
-                {resource.year ?? "General"}{resource.session ? ` · ${resource.session.replace("_", " ")}` : ""}
-                {resource.paper_code ? ` · ${resource.paper_code}` : ""}{resource.variant ? ` v${resource.variant}` : ""}
+                {resource.year ?? "General"} · {friendlySession(resource.session)}
               </div>
             </div>
             <span className="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">

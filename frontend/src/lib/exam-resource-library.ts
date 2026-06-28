@@ -8,6 +8,21 @@ export type ExamLibraryResource = {
 const SESSION_LABELS: Record<string, string> = { OCT_NOV: "Oct/Nov", MAY_JUNE: "May/June", FEB_MAR: "Feb/March", FEB_MARCH: "Feb/March" };
 const SESSION_ORDER: Record<string, number> = { OCT_NOV: 0, MAY_JUNE: 1, FEB_MAR: 2, FEB_MARCH: 2 };
 
+export function friendlyResourceName(resource: Pick<ExamLibraryResource, "resource_type" | "paper_code" | "paper_number" | "variant">, subjectName?: string | null) {
+  const paper = resource.paper_number ?? (resource.paper_code && /^\d+$/.test(resource.paper_code) ? Number(resource.paper_code) : null);
+  const subject = subjectName?.trim() || "Exam";
+  const kind = resource.resource_type === "MARKING_SCHEME" ? "Mark Scheme" : resource.resource_type === "PAST_PAPER" ? "Question Paper" : titleCase(resource.resource_type);
+  return paper ? `${subject} · Paper ${paper}${resource.variant ? ` · Variant ${resource.variant}` : ""} · ${kind}` : `${subject} · ${kind}`;
+}
+
+export function friendlySession(session?: string | null) {
+  return session ? SESSION_LABELS[session] ?? titleCase(session) : "General";
+}
+
+function titleCase(value: string) {
+  return value.toLowerCase().replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export function normalizeExamResource(resource: ExamLibraryResource) {
   const paperNumber = resource.paper_number ?? (resource.paper_code && /^\d+$/.test(resource.paper_code) ? Number(resource.paper_code) : null);
   const session = resource.session ?? "NO_SESSION";
