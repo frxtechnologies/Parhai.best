@@ -19,7 +19,8 @@
     "typecheck:frontend": "npm --prefix frontend run typecheck",
     "typecheck:backend": "npm --prefix backend run typecheck",
     "test": "npm --prefix backend test && tsx --test frontend/src/**/*.test.ts"
-    ,"generate:screenshots": "npm --prefix backend run generate:screenshots --"
+    ,"generate:screenshots": "npm --prefix backend run generate:screenshots --",
+    "audit:questions": "npm --prefix backend run audit:questions"
   },
   "engines": {
     "node": ">=20"

@@ -137,6 +137,8 @@ export interface AiSource {
   screenshotStatus?: string | null;
   bbox?: { x: number; y: number; width: number; height: number } | null;
   filePath?: string | null;
+  confidence?: number | null;
+  needsReview?: boolean | null;
   questionText?: string | null;
   answerText?: string | null;
   sourcePage?: number | null;

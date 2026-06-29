@@ -4,11 +4,16 @@ const TOPIC_ALIASES: Record<string, string[]> = {
   waves: ["wave", "frequency", "wavelength", "oscillation"],
   motion: ["kinematics", "speed", "velocity", "acceleration", "distance"],
   forces: ["force", "moment", "pressure", "mass", "weight", "momentum"],
-  energy: ["work", "power", "efficiency"],
+  energy: ["work", "work energy and power", "energy transfer", "kinetic energy", "gravitational potential energy", "efficiency", "power"],
   magnetism: ["magnet", "induction", "transformer"],
   "thermal physics": ["thermal", "heat", "temperature", "gas"],
   "atomic physics": ["atomic", "radioactivity", "radiation", "nucleus"],
+  "circle geometry": ["circle", "circles", "circle theorem", "circle theorems", "cyclic quadrilateral", "tangent", "chord", "radius", "diameter", "arc", "sector"],
+  algebra: ["equation", "equations", "factorise", "factorize", "expression", "expressions"],
+  trigonometry: ["trig", "sine", "cosine", "bearing", "bearings"],
 };
+
+const TYPO_NORMALIZATION: Record<string, string> = { ciruces: "circles", circels: "circles", cirlces: "circles" };
 
 const STOP_WORDS = new Set([
   "about", "all", "and", "answer", "appeared", "can", "explain", "find", "from", "give", "how", "many",
@@ -18,7 +23,7 @@ const STOP_WORDS = new Set([
 ]);
 
 export function expandSearchTerms(message: string) {
-  const words = [...new Set(message.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/))]
+  const words = [...new Set(message.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).map((word) => TYPO_NORMALIZATION[word] ?? word))]
     .filter((word) => word.length >= 3 && !STOP_WORDS.has(word) && !/^20\d{2}$/.test(word));
   const expanded = new Set(words);
   for (const [topic, aliases] of Object.entries(TOPIC_ALIASES)) {
@@ -27,7 +32,7 @@ export function expandSearchTerms(message: string) {
       aliases.forEach((alias) => expanded.add(alias));
     }
   }
-  return [...expanded].slice(0, 12);
+  return [...expanded].slice(0, 24);
 }
 
 export function canonicalTopic(topic: string) {
@@ -83,7 +88,40 @@ export function formatCitation(subject: { name: string; code?: string }, metadat
 
 export type RankableSource = { content: string; reference: string; metadata: Record<string, unknown> };
 
+export type RequestedTopic = { topic: string; subtopics: string[]; keywords: string[] };
+
+export function detectRequestedTopic(message: string, subjectCode: string): RequestedTopic | null {
+  const value = message.toLowerCase();
+  if (subjectCode === "5054") {
+    if (/\b(total internal reflection|critical angle|refractive index|refract(?:ion|ed|s)?|ray diagram|light ray)\b/.test(value)) {
+      return { topic: "Light", subtopics: ["Refraction", "Total Internal Reflection", "Critical Angle", "Ray Diagrams"], keywords: ["refraction", "refract", "total internal reflection", "critical angle", "refractive index", "ray diagram", "light ray"] };
+    }
+    if (/\b(energy|work done|kinetic energy|gravitational potential energy|power|efficiency|energy transfer)\b/.test(value)) {
+      return { topic: "Energy", subtopics: [], keywords: ["energy", "work done", "kinetic energy", "gravitational potential energy", "power", "efficiency", "energy transfer"] };
+    }
+    if (/\b(current|voltage|resistance|circuit|resistor|electrical energy)\b/.test(value)) {
+      return { topic: "Electricity", subtopics: [], keywords: ["current", "voltage", "resistance", "circuit", "resistor", "power in circuit", "electrical energy"] };
+    }
+    if (/\b(motion graph|distance.time|speed.time|velocity.time)\b/.test(value)) {
+      return { topic: "Motion", subtopics: [], keywords: ["graph", "distance time", "speed time", "velocity time"] };
+    }
+  }
+  if (subjectCode === "4024") {
+    if (/\b(circle|circles|ciruces|circle theorem|tangent|chord|cyclic quadrilateral|alternate segment|angle at (?:the )?(?:centre|center|circumference))\b/.test(value)) {
+      return { topic: "Geometry", subtopics: ["Circle Theorems"], keywords: ["circle", "circle theorem", "tangent", "chord", "cyclic quadrilateral", "alternate segment", "angle at centre", "angle at circumference"] };
+    }
+    if (/\b(graph|curve|grid|coordinate axes|y\s*=|f\s*\(|gradient|intercept|equation of (?:a|the) line|function)\b/.test(value)) {
+      return { topic: "Graphs and Functions", subtopics: [], keywords: ["graph", "curve", "grid", "coordinate axes", "gradient", "intercept", "equation of line", "function"] };
+    }
+    if (/\b(algebra|equation|factorise|factorize|expression)\b/.test(value)) {
+      return { topic: "Algebra", subtopics: [], keywords: ["algebra", "equation", "factorise", "factorize", "expression"] };
+    }
+  }
+  return null;
+}
+
 export function rankEvidence<T extends RankableSource>(sources: T[], terms: string[], maxSources = 12) {
+  const hardestIntent = terms.some((term) => ["hard", "hardest", "difficult", "challenging"].includes(term));
   return sources.map((source, order) => {
     const topic = String(source.metadata.topic ?? "").toLowerCase();
     const subtopic = String(source.metadata.subtopic ?? "").toLowerCase();
@@ -98,11 +136,31 @@ export function rankEvidence<T extends RankableSource>(sources: T[], terms: stri
       if (reference.includes(term)) score += 2;
     }
     if (source.metadata.questionNumber) score += 1;
+    if (hardestIntent && source.metadata.questionNumber) {
+      const marks = Number(source.metadata.marks ?? 0);
+      const questionNumber = String(source.metadata.questionNumber);
+      const confidence = Number(source.metadata.confidence ?? 0);
+      const demanding = /\b(explain|calculate|determine|show that|graph|plot|table|deduce|describe)\b/i.test(source.content);
+      score += Math.min(marks, 15) * 2.5;
+      if (String(source.metadata.difficulty).toUpperCase() === "HARD") score += 12;
+      if (/[a-z]|\(|\)/i.test(questionNumber)) score += 5;
+      if (demanding) score += 5;
+      score += confidence * 3;
+      if (marks <= 1) score -= 18;
+      if (source.metadata.sourcePage) score += 1;
+    }
     return { source, score, order };
   }).filter((entry) => !terms.length || entry.score > 0)
     .sort((a, b) => b.score - a.score || a.order - b.order)
     .slice(0, Math.min(maxSources, 12))
     .map((entry) => entry.source);
+}
+
+export function formatQuestionResultSummary(totalMatches: number, duplicatesRemoved: number, displayedCount: number) {
+  const safeTotal = Math.max(0, totalMatches);
+  const safeRemoved = Math.max(0, Math.min(duplicatesRemoved, safeTotal));
+  const safeDisplayed = Math.max(0, Math.min(displayedCount, safeTotal - safeRemoved));
+  return `Found ${safeTotal} possible match${safeTotal === 1 ? "" : "es"}. Removed ${safeRemoved} repeated/similar question${safeRemoved === 1 ? "" : "s"}. Showing the ${safeDisplayed} best result${safeDisplayed === 1 ? "" : "s"}.`;
 }
 
 export function finalizeGroundedAnswer(answer: string, sourceCount: number, missingMessage: string) {

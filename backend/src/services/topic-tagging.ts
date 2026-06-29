@@ -29,6 +29,21 @@ function keywordScore(text: string, row: TopicMapRow) {
   return Math.min(1, 0.52 + matches.length * 0.12 + phraseBonus);
 }
 
+function math4024Tag(text: string): TopicTag | null {
+  const value = text.toLowerCase().replace(/\s+/g, " ");
+  const has = (pattern: RegExp) => pattern.test(value);
+  if (has(/\b(graph|grid|coordinate axes|plot|curve|gradient|intercept|equation of (?:a|the) line|f\s*\(|function|y\s*=)\b/)) {
+    return { topic: "Graphs and Functions", subtopic: has(/\b(coordinate|gradient|intercept|equation of (?:a|the) line)\b/) ? "Coordinate Geometry" : "Graphs", syllabusReference: null, difficulty: "MEDIUM", confidence: 0.9, needsReview: false, method: "keyword", note: "Strong graph/function evidence." };
+  }
+  if (has(/\b(cyclic quadrilateral|circle theorem|angle at (?:the )?(?:centre|center|circumference)|alternate segment(?: theorem)?|tangent.*(?:circle|chord)|chord.*(?:circle|tangent))\b/)) {
+    return { topic: "Geometry", subtopic: "Circle Theorems", syllabusReference: null, difficulty: "MEDIUM", confidence: 0.9, needsReview: false, method: "keyword", note: "Strong circle-theorem evidence." };
+  }
+  if (has(/\b(circle|radius|diameter|arc|sector|circumference)\b/)) {
+    return { topic: "Geometry", subtopic: "Circles", syllabusReference: null, difficulty: "MEDIUM", confidence: 0.68, needsReview: true, method: "keyword", note: "Circle geometry keyword match needs review." };
+  }
+  return null;
+}
+
 export async function tagQuestionsForSubject(
   client: SupabaseClient,
   subjectCode: string,
@@ -55,6 +70,11 @@ export async function tagQuestionsForSubject(
 
   const aiCandidates: TaggableQuestion[] = [];
   for (const question of questions) {
+    const mathRule = subjectCode.padStart(4, "0") === "4024" ? math4024Tag(question.text) : null;
+    if (mathRule) {
+      results.set(question.number, mathRule);
+      continue;
+    }
     const ranked = maps.map((row) => ({ row, score: keywordScore(question.text, row) })).sort((a, b) => b.score - a.score);
     const best = ranked[0]!;
     if (best.score >= 0.85) {
@@ -87,8 +107,8 @@ export async function tagQuestionsForSubject(
       results.set(question.number, {
         topic: canonicalTopic(matched.topic), subtopic: matched.subtopic || ai.subtopic || null,
         syllabusReference: matched.syllabus_reference, difficulty: ai.difficulty,
-        confidence, needsReview: confidence < 0.85, method: "ai",
-        note: confidence < 0.85 ? "AI classification requires admin review." : null,
+        confidence, needsReview: confidence < 0.70, method: "ai",
+        note: confidence < 0.70 ? "Topic needs review." : null,
       });
     }
   }

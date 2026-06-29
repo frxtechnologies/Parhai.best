@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanQuestionText, splitNumberedQuestions } from "./resource-processor";
+import { cleanQuestionText, questionTextQuality, splitNumberedQuestions } from "./resource-processor";
 
 test("splits numbered questions and subparts without inventing content", () => {
   const rows = splitNumberedQuestions(`
@@ -27,4 +27,15 @@ test("sums every mark token in a combined question", () => {
 
 test("removes PDF boilerplate and dotted answer-line garbage", () => {
   assert.equal(cleanQuestionText("DO NOT WRITE IN THIS MARGIN Explain refraction. ................................ UCLES TURN OVER"), "Explain refraction.");
+});
+
+test("removes Cambridge page codes while preserving equations and marks", () => {
+  const cleaned = cleanQuestionText("Page 3 of 12 4024/12/M/J/23 * 000123 * Solve y = 2x + 3. [2]");
+  assert.equal(cleaned, "Solve y = 2x + 3. [2]");
+});
+
+test("rejects instruction text and verifies real command-word questions", () => {
+  assert.equal(questionTextQuality("INSTRUCTIONS Answer all questions. Write your name."), "failed");
+  assert.equal(questionTextQuality("Calculate the refractive index of the glass block and show all working clearly. [3]"), "good");
+  assert.equal(questionTextQuality("glass block [1]"), "needs_review");
 });

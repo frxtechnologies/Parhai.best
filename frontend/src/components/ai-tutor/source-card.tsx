@@ -6,10 +6,11 @@ import { requireSupabase } from "@/lib/supabase";
 import { ExternalLink, FileCheck2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-export function SourceCard({ source, onExplain, generatePreview = false }: {
+export function SourceCard({ source, onExplain, generatePreview = false, rank }: {
   source: AiSource;
   onExplain?: (source: AiSource) => void;
   generatePreview?: boolean;
+  rank?: number;
 }) {
   const [previewUrl, setPreviewUrl] = useState(source.screenshotUrl ?? null);
   const [loading, setLoading] = useState(false);
@@ -49,7 +50,8 @@ export function SourceCard({ source, onExplain, generatePreview = false }: {
     if (response.ok && body.url) window.open(body.url, "_blank", "noopener,noreferrer");
   }
 
-  return <article className="animate-in fade-in slide-in-from-bottom-1 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+  return <article className="animate-in fade-in slide-in-from-bottom-1 rounded-2xl border border-slate-200/80 bg-white p-3 transition hover:border-emerald-200 hover:shadow-[0_8px_24px_rgba(15,23,42,.05)]">
+    {rank && <span className="mb-2 inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#0B1F3A] text-xs font-bold text-white">{rank}</span>}
     <div className="flex items-start justify-between gap-2">
       <div><p className="text-sm font-semibold text-[#0B1F3A]">{source.reference.replace(/^\[S\d+\]\s*/, "")}</p>
         <p className="mt-1 text-xs text-slate-400">{source.year ?? "Year unavailable"} · {source.session?.replace("_", " ") ?? "Session unavailable"}{source.questionNumber ? ` · Question ${source.questionNumber}` : ""}</p></div>
@@ -61,7 +63,7 @@ export function SourceCard({ source, onExplain, generatePreview = false }: {
       : loading
         ? <p className="mt-3 animate-pulse rounded-lg bg-slate-50 p-3 text-xs text-slate-500">Generating preview…</p>
         : failed
-          ? <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">Screenshot preview unavailable. Preview crop failed; use View PDF fallback.</p>
+          ? <p className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Preview unavailable — open PDF instead.</p>
           : <p className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">Screenshot not generated yet.</p>}
 
     <div className="mt-3 flex flex-wrap gap-2">
@@ -72,9 +74,11 @@ export function SourceCard({ source, onExplain, generatePreview = false }: {
     </div>
     {source.questionText && <details className="mt-2 rounded-lg bg-slate-50 p-2 text-xs"><summary className="cursor-pointer font-semibold">View question text</summary><p className="mt-2 whitespace-pre-wrap">{source.questionText}</p></details>}
     {source.answerText && <details className="mt-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900"><summary className="cursor-pointer font-semibold">View marking scheme</summary><p className="mt-2 whitespace-pre-wrap">{source.answerText}</p></details>}
+    {source.sourceType === "question" && !source.answerText && <p className="mt-2 px-1 text-xs text-slate-400">Marking scheme not linked yet</p>}
     {isAdminEmail(user?.email) && <details className="mt-2 rounded-lg border border-dashed p-2 text-[11px] text-slate-500"><summary className="cursor-pointer font-semibold">Screenshot debug</summary><pre className="mt-2 whitespace-pre-wrap break-all">{JSON.stringify({
       question_id: source.chunkId, resource_id: source.resourceId, source_page: source.sourcePage,
       bbox: source.bbox, screenshot_status: failed ? "failed" : source.screenshotStatus, file_path: source.filePath,
+      confidence: source.confidence, needs_review: source.needsReview,
     }, null, 2)}</pre></details>}
     {(source.topic || source.difficulty || source.marks != null) && <p className="mt-2 text-xs text-slate-500">{[source.topic, source.subtopic, source.difficulty, source.marks != null ? `${source.marks} marks` : null].filter(Boolean).join(" · ")}</p>}
   </article>;

@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
-import { expandSearchTerms, finalizeGroundedAnswer, formatCitation, rankEvidence } from "../services/rag-utils";
+import { detectRequestedTopic, expandSearchTerms, finalizeGroundedAnswer, formatCitation, formatQuestionResultSummary, rankEvidence } from "../services/rag-utils";
 import { assistantModeFor, cambridgeTeacherName, finalizeTeacherAnswer, requestedOutsideSubject } from "../services/teacher-mode";
 import { screenshotMode } from "../services/question-screenshots";
 
@@ -54,8 +54,32 @@ function deduplicateQuestions(sources: SourceResult[]) {
   return { unique, removed };
 }
 
+function questionSearchAnswer(subject: { name: string; code: string }, sources: SourceResult[], message: string) {
+  const questions = sources.filter((source) => source.sourceType === "question");
+  const requestedTopic = expandSearchTerms(message).find((term) =>
+    !["hard", "hardest", "difficult", "challenging"].includes(term)) ?? "matching";
+  const lines = questions.map((source, index) => {
+    const metadata = source.metadata;
+    const session = String(metadata.session ?? "Session unavailable").replace("_", " ");
+    const topic = [metadata.topic, metadata.subtopic].filter(Boolean).join(" · ") || "Topic unavailable";
+    return `${index + 1}. ${metadata.year ?? "Year unavailable"} · ${session} · Paper ${metadata.paperCode ?? metadata.paperNumber ?? "—"} · Variant ${metadata.variant ?? "—"} · Question ${metadata.questionNumber ?? "—"} — ${topic} — ${metadata.difficulty ?? "MEDIUM"} — ${metadata.marks ?? "—"} marks [S${index + 1}]`;
+  });
+  const tip = /\benergy|work|power|efficiency\b/i.test(message)
+    ? "For Energy questions, write the correct equation first, substitute with units, and check whether the question asks for energy transferred, power, or efficiency."
+    : "Start with the highest-mark questions, identify the command word, and show enough working for every available method mark.";
+  return [
+    "### Direct answer",
+    `I found ${questions.length} strong ${requestedTopic}-related question${questions.length === 1 ? "" : "s"} from ${subject.name} ${subject.code}.`,
+    "### Best matches",
+    ...lines,
+    "### Teacher tip",
+    tip,
+  ].join("\n");
+}
+
 async function retrieveResourceSources(client: SupabaseClient, input: z.infer<typeof RequestBody>, subject: { id: number; name: string; code: string }) {
   const { year, yearFrom, yearTo, paperNumber, session, difficulty, terms } = getFilters(input.message, input.year);
+  const requestedTopic = detectRequestedTopic(input.message, subject.code);
   let resourcesQuery = client.from("resources")
     .select("id,title,resource_type,year,session,paper_code,variant,processing_status")
     .eq("subject_id", subject.id).eq("is_approved", true);
@@ -68,16 +92,34 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   if (terms.length) chunksQuery = chunksQuery.or(terms.slice(0, 3).map((term) => `content.ilike.%${term}%`).join(","));
 
   let indexedQuery = client.from("question_index")
-    .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,total_marks,display_question_text,question_text,answer_text,question_screenshot_url,screenshot_status,source_page,bbox,source_file,year,session,paper_code,variant,resources!inner(id,title,bucket,storage_path,related_resource_id,is_approved)")
-    .eq("subject_id", subject.id).eq("resources.is_approved", true);
+    .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,total_marks,display_question_text,clean_question_text,question_text,answer_text,question_screenshot_url,screenshot_status,source_page,bbox,confidence,needs_review,text_quality_status,student_verified,marking_scheme_link_status,source_file,year,session,paper_code,variant,resources!inner(id,title,bucket,storage_path,related_resource_id,is_approved)")
+    .eq("subject_id", subject.id).eq("resources.is_approved", true)
+    .eq("student_verified", true).not("clean_question_text", "is", null);
   if (year) indexedQuery = indexedQuery.eq("year", year);
   if (yearFrom) indexedQuery = indexedQuery.gte("year", yearFrom);
   if (yearTo) indexedQuery = indexedQuery.lte("year", yearTo);
   if (paperNumber) indexedQuery = indexedQuery.eq("paper_code", String(paperNumber));
   if (session) indexedQuery = indexedQuery.eq("session", session);
   if (difficulty) indexedQuery = indexedQuery.eq("difficulty", difficulty);
-  if (terms.length) indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `question_text.ilike.%${term}%`, `answer_text.ilike.%${term}%`]).join(","));
-  const [resources, chunks, indexed] = await Promise.all([resourcesQuery.order("year", { ascending: false }).limit(100), chunksQuery.limit(20), indexedQuery.limit(100)]);
+  if (requestedTopic) {
+    indexedQuery = requestedTopic.topic === "Energy"
+      ? indexedQuery.or("topic.ilike.%Energy%,topic.ilike.%Work Energy and Power%")
+      : indexedQuery.ilike("topic", requestedTopic.topic);
+    if (requestedTopic.subtopics.length) {
+      indexedQuery = indexedQuery.or([
+        ...requestedTopic.subtopics.map((subtopic) => `subtopic.ilike.%${subtopic}%`),
+        ...requestedTopic.keywords.map((keyword) => `clean_question_text.ilike.%${keyword}%`),
+      ].join(","));
+    }
+  } else if (terms.length) {
+    indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `clean_question_text.ilike.%${term}%`]).join(","));
+  }
+  const [resources, chunks, indexed, topicMap] = await Promise.all([
+    resourcesQuery.order("year", { ascending: false }).limit(100),
+    chunksQuery.limit(20),
+    indexedQuery.limit(100),
+    client.from("topic_maps").select("id", { count: "exact", head: true }).eq("subject_code", subject.code).eq("status", "approved"),
+  ]);
   let semantic: { data: any[] | null; error: { message?: string } | null } = { data: [], error: null };
   if (isAiConfigured()) {
     try {
@@ -116,8 +158,8 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     id: row.id,
     paperId: null,
     reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
-    content: `Question: ${row.display_question_text ?? row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
-    metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, difficulty: row.difficulty, marks: row.total_marks ?? row.marks, questionText: row.display_question_text ?? row.question_text, answerText: row.answer_text, screenshotUrl: screenshotMode() === "on_demand" ? null : row.question_screenshot_url, screenshotStatus: screenshotMode() === "on_demand" ? "not_generated" : row.screenshot_status, sourcePage: row.source_page, bbox: row.bbox, filePath: (Array.isArray(row.resources) ? row.resources[0] : row.resources)?.storage_path, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
+    content: `Question: ${row.clean_question_text ?? row.display_question_text ?? row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
+    metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, confidence: row.confidence, needsReview: row.needs_review, difficulty: row.difficulty, marks: row.total_marks ?? row.marks, questionText: row.display_question_text ?? row.clean_question_text ?? row.question_text, answerText: row.answer_text, screenshotUrl: screenshotMode() === "on_demand" ? null : row.question_screenshot_url, screenshotStatus: screenshotMode() === "on_demand" ? "not_generated" : row.screenshot_status, sourcePage: row.source_page, bbox: row.bbox, filePath: (Array.isArray(row.resources) ? row.resources[0] : row.resources)?.storage_path, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
   }));
   const deduplicated = deduplicateQuestions(rawQuestionSources);
   const questionSources = deduplicated.unique;
@@ -129,7 +171,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     return true;
   });
   const sources = rankEvidence(uniqueSources, terms, 12);
-  return { resources: resources.data ?? [], sources, indexedQuestionCount: indexed.data?.length ?? 0, duplicatesRemoved: deduplicated.removed };
+  return { resources: resources.data ?? [], sources, indexedQuestionCount: indexed.data?.length ?? 0, duplicatesRemoved: deduplicated.removed, topicMapCount: topicMap.count ?? 0 };
 }
 
 function getFilters(message: string, explicitYear?: number | null) {
@@ -144,7 +186,8 @@ function getFilters(message: string, explicitYear?: number | null) {
   const session = lower.includes("may/june") || lower.includes("may june") ? "MAY_JUNE"
     : lower.includes("oct/nov") || lower.includes("oct nov") ? "OCT_NOV"
       : lower.includes("feb/march") || lower.includes("feb march") ? "FEB_MAR" : null;
-  const difficulty = /\bhard|difficult\b/i.test(message) ? "HARD" : /\beasy\b/i.test(message) ? "EASY" : /\bmedium\b/i.test(message) ? "MEDIUM" : null;
+  const rankedDifficultyRequest = /\b(hardest|difficult|challenging)\b/i.test(message);
+  const difficulty = !rankedDifficultyRequest && /\bhard\b/i.test(message) ? "HARD" : /\beasy\b/i.test(message) ? "EASY" : /\bmedium\b/i.test(message) ? "MEDIUM" : null;
   return { year: years.length >= 2 || lastYears ? null : year, yearFrom, yearTo, paperNumber, session, difficulty, terms: expandSearchTerms(message) };
 }
 
@@ -223,6 +266,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     if (input.subjectName && input.subjectName.toLowerCase() !== subject.name.toLowerCase()) { res.status(400).json({ error: "Subject scope does not match the selected subject." }); return; }
     if (input.board && input.board.toLowerCase() !== subject.board.toLowerCase()) { res.status(400).json({ error: "Board scope does not match the selected subject." }); return; }
     const mode = assistantModeFor(input.message);
+    const questionListRequest = /\b(give|show|find|list|make|generate)\b.*\b(questions?|worksheet|practice|paper\s*\d)\b/i.test(input.message);
     const teacherName = cambridgeTeacherName(subject.name);
     if (requestedOutsideSubject(input.message, subject.name)) {
       res.json({ answer: `I’m your ${teacherName}, so I can only help with ${subject.name} in this workspace. Please open the correct subject page for that question.`, sources: [], ...(input.debug ? { diagnostics: { mode, activeSubject: subject.name, blockedOutsideSubject: true }, retrievedResults: [] } : {}) });
@@ -238,6 +282,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
       matchedChunks: resourceRetrieval.sources.length,
       indexedQuestions: resourceRetrieval.indexedQuestionCount,
       duplicatesRemoved: resourceRetrieval.duplicatesRemoved,
+      topicMapCount: resourceRetrieval.topicMapCount,
       matchedPapers: legacyRetrieval.matchedPapers,
       extractedQuestionCount: legacyRetrieval.extractedQuestionCount,
       matchedQuestionRows: legacyRetrieval.matchedQuestions,
@@ -246,22 +291,36 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     };
     const combined = [...resourceRetrieval.sources, ...legacyRetrieval.sources];
     const seenEvidence = new Set<string>();
-    const retrieved = rankEvidence(combined.filter((source) => {
+    const rankedRetrieved = rankEvidence(combined.filter((source) => {
       const key = `${source.sourceType}:${source.metadata.legacyQuestionId ?? source.metadata.resourceId ?? source.paperId ?? source.id}:${source.metadata.questionNumber ?? ""}:${source.content.slice(0, 120)}`;
       if (seenEvidence.has(key)) return false;
       seenEvidence.add(key);
       return true;
     }), getFilters(input.message, input.year).terms, 12);
+    const retrieved = questionListRequest
+      ? rankedRetrieved.filter((source) => source.sourceType === "question").slice(0, 6)
+      : rankedRetrieved;
     const onlyUnprocessedResources = resourceRetrieval.resources.length > 0 && resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
     const onlyUnprocessedPapers = legacyRetrieval.matchedPapers.length > 0 && legacyRetrieval.extractedQuestionCount === 0;
     if (mode === "rag" && !retrieved.length && (onlyUnprocessedResources || onlyUnprocessedPapers)) {
       res.json({ answer: onlyUnprocessedResources ? "This resource is uploaded but not processed yet. Please process it first." : UNPROCESSED_PAPER_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) });
       return;
     }
-    if (mode === "rag" && retrieved.length === 0) { res.json({ answer: MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) }); return; }
+    if (mode === "rag" && retrieved.length === 0) {
+      const subjectResources = resourceRetrieval.resources;
+      const questionPapers = subjectResources.filter((resource) => resource.resource_type === "PAST_PAPER");
+      const markingSchemes = subjectResources.filter((resource) => resource.resource_type === "MARKING_SCHEME");
+      const failedPapers = questionPapers.filter((resource) => resource.processing_status === "failed");
+      const statusMessages = [
+        resourceRetrieval.indexedQuestionCount === 0 && questionPapers.length ? "Maths papers are uploaded but not indexed yet." : null,
+        resourceRetrieval.topicMapCount === 0 && subject.code === "4024" ? "Maths topic map missing." : null,
+        failedPapers.length && markingSchemes.length ? `${failedPapers.length} Maths question paper${failedPapers.length === 1 ? " has" : "s have"} failed processing while marking schemes are available.` : null,
+      ].filter(Boolean);
+      res.json({ answer: statusMessages.join(" ") || MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) });
+      return;
+    }
 
     const context = retrieved.map((source, index) => `[S${index + 1}] ${source.reference}\nMetadata: ${JSON.stringify(source.metadata)}\n${source.content}`).join("\n\n");
-    const questionListRequest = /\b(give|show|find|list|make|generate)\b.*\b(questions?|worksheet|practice|paper\s*\d)\b/i.test(input.message);
     const recentHistory = (input.chatHistory ?? []).slice(-8).map((message) => `${message.role === "user" ? "Student" : "Assistant"}: ${message.content}`).join("\n");
     let answer: string;
     try {
@@ -271,12 +330,12 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
         ? "Keep the explanation to 2-4 concise sentences."
         : input.answerLength === "full"
           ? "Provide a complete exam breakdown with method, marking logic, common errors, and practice order."
-          : "Use a medium-length teacher explanation: direct answer, key points, questions found, teacher tip.";
+          : "Keep the default answer concise. Use only: Direct answer; Questions found / breakdown; Teacher tip. Do not add long definitions, common mistakes, or related topics unless requested.";
       const modeRules = mode === "rag"
         ? `RAG MODE — use only the supplied Supabase evidence. Cite every factual claim with [S#]. Never invent a paper, question, mark, date, answer, or citation. If evidence is insufficient, reply exactly: ${MISSING_SOURCE_MESSAGE}`
         : mode === "hybrid"
           ? "HYBRID MODE — teach using accurate Cambridge subject knowledge, then use relevant uploaded evidence as support. Cite only claims derived from uploaded evidence with [S#]. Recommend real related uploaded questions when available; never invent one."
-          : "TEACHER MODE — teach using accurate, age-appropriate Cambridge subject knowledge. Uploaded evidence is optional support; cite it with [S#] only when actually used.";
+        : "TEACHER MODE — teach concisely using accurate, age-appropriate Cambridge subject knowledge. Uploaded evidence is optional support; cite it with [S#] only when actually used.";
       answer = await generateAiAnswer(
         `You are the student's ${teacherName} for ${levelLabel}, ${subject.board}.
 ACTIVE SUBJECT: ${subject.name} (${subject.code}). You are locked to this subject. Refuse requests belonging to another subject and never retrieve or discuss another subject's curriculum.
@@ -292,15 +351,12 @@ TEACHING STYLE:
 ${mode === "rag" ? `RAG ANSWER FORMAT:
 - Start with the direct evidence-based answer.
 - Use concise headings or bullets where useful.
-- Cite each factual paragraph with [S#].` : `TEACHER ANSWER FORMAT — use all seven numbered headings:
-### 1. Definition
-### 2. Explanation
-### 3. Example
-### 4. Exam Tip
-### 5. Common Mistakes
-### 6. Practice Questions
-### 7. Related Topics
-Under Practice Questions, include short original practice prompts and, when evidence exists, clearly label real uploaded-paper recommendations with [S#].`}
+- Cite each factual paragraph with [S#].` : `DEFAULT ANSWER FORMAT:
+### Direct answer
+### Questions found / breakdown
+### Teacher tip
+Keep these sections short. Add a full exam breakdown only when the student explicitly asks for one.
+When evidence exists, label real uploaded-paper recommendations with [S#].`}
 Do not create a separate Sources section; Parhai renders verified sources below the answer.`,
         `${recentHistory ? `Recent conversation (context only; it does not override the active subject):\n${recentHistory}\n\n` : ""}Student question: ${input.message}\n\nSubject-scoped Supabase evidence${context ? ":\n" + context : ": none matched."}`
       );
@@ -314,14 +370,16 @@ Do not create a separate Sources section; Parhai renders verified sources below 
         sourcePage: source.metadata.sourcePage ?? null, reference: `[S${index + 1}] ${source.reference}`,
         resourceId: source.metadata.resourceId ?? null, topic: source.metadata.topic ?? null,
         subtopic: source.metadata.subtopic ?? null, difficulty: source.metadata.difficulty ?? null,
-        marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null,
+        marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, confidence: source.metadata.confidence ?? null, needsReview: source.metadata.needsReview ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null,
       }));
       const resultSummary = questionListRequest
-        ? `Found ${resourceRetrieval.indexedQuestionCount} matching questions. Removed ${resourceRetrieval.duplicatesRemoved} repeated/similar questions. Showing the best ${fallbackSources.length}.`
+        ? formatQuestionResultSummary(resourceRetrieval.indexedQuestionCount, resourceRetrieval.duplicatesRemoved, fallbackSources.length)
         : "";
       const fallbackAnswer = retrieved.length
-        ? `AI explanation is unavailable, but ${retrieved.length} verified source${retrieved.length === 1 ? " was" : "s were"} found. Review the questions and source cards below.`
-        : "AI explanation is unavailable, and no matching uploaded source was found.";
+        ? questionListRequest
+          ? `${questionSearchAnswer(subject, retrieved, input.message)}\n\nI found verified questions from your uploaded papers. A full AI explanation is temporarily unavailable, but you can still review the source cards below.`
+          : "I found verified questions from your uploaded papers. A full AI explanation is temporarily unavailable, but you can still review the source cards below."
+        : "I could not find a matching verified question in your uploaded papers yet.";
       res.json({ answer: [resultSummary, fallbackAnswer].filter(Boolean).join("\n\n"), sources: fallbackSources, providerUnavailable: true, ...(input.debug ? { providerError: providerError instanceof Error ? providerError.message : "AI provider request failed.", retrievedResults: retrieved, diagnostics } : {}) });
       return;
     }
@@ -330,16 +388,18 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       ? finalizeGroundedAnswer(answer, retrieved.length, MISSING_SOURCE_MESSAGE)
       : finalizeTeacherAnswer(answer, retrieved.length, mode);
     const cited = new Set(grounded.citedIndexes);
-    const sources = retrieved.flatMap((source, index) => (cited.has(index + 1) || (questionListRequest && source.sourceType === "question")) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, resourceId: source.metadata.resourceId ?? null, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, variant: source.metadata.variant ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null, topic: source.metadata.topic ?? null, subtopic: source.metadata.subtopic ?? null, difficulty: source.metadata.difficulty ?? null, marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
+    const sources = retrieved.flatMap((source, index) => (cited.has(index + 1) || (questionListRequest && source.sourceType === "question")) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, resourceId: source.metadata.resourceId ?? null, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, variant: source.metadata.variant ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null, topic: source.metadata.topic ?? null, subtopic: source.metadata.subtopic ?? null, confidence: source.metadata.confidence ?? null, needsReview: source.metadata.needsReview ?? null, difficulty: source.metadata.difficulty ?? null, marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
     const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: grounded.answer, sources }]);
     if (historyError) throw historyError;
     const { error: logError } = await client.from("ai_chat_logs").insert({ user_id: res.locals.user.id, subject_id: subject.id, user_question: input.message, ai_answer: grounded.answer, sources_used: sources });
     if (logError) req.log.warn({ logError }, "Could not save AI audit log");
 
+    const displayedQuestions = sources.filter((source) => source.sourceType === "question").length;
     const resultSummary = questionListRequest
-      ? `Found ${resourceRetrieval.indexedQuestionCount} matching questions. Removed ${resourceRetrieval.duplicatesRemoved} repeated/similar questions. Showing the best ${sources.filter((source) => source.sourceType === "question").length}.`
+      ? formatQuestionResultSummary(resourceRetrieval.indexedQuestionCount, resourceRetrieval.duplicatesRemoved, displayedQuestions)
       : "";
-    res.json({ answer: [resultSummary, grounded.answer].filter(Boolean).join("\n\n"), sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
+    const presentedAnswer = questionListRequest ? questionSearchAnswer(subject, retrieved, input.message) : grounded.answer;
+    res.json({ answer: [resultSummary, presentedAnswer].filter(Boolean).join("\n\n"), sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
     req.log.error({ error }, "AI assistant request failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "AI assistant request failed." });

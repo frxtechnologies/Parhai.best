@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "test": "tsx --test src/**/*.test.ts",
     "generate:screenshots": "tsx src/scripts/generate-question-screenshots.ts",
+    "audit:questions": "tsx src/scripts/audit-question-index.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit"

@@ -60,12 +60,28 @@ function readMarks(text: string) {
 export function cleanQuestionText(text: string) {
   return text
     .replace(/\b(?:DO NOT WRITE IN THIS MARGIN|TURN OVER|BLANK PAGE|UCLES|Cambridge University Press & Assessment)\b/gi, " ")
+    .replace(/\b(?:INSTRUCTIONS|INFORMATION)\s+(?=(?:Answer|You must|Use a|Write|If you))/gi, " ")
+    .replace(/\bPage\s+\d+\s+of\s+\d+\b/gi, " ")
+    .replace(/\b\d{4}\/(?:[0-9]{1,2}|[A-Z]{1,2})\/(?:M\/J|O\/N|F\/M)\/\d{2}\b/gi, " ")
+    .replace(/\*+\s*\d+\s*\*+/g, " ")
+    .replace(/(?:\u0000|\u0001|\u0002|\u0003)+/g, " ")
     .replace(/\.{5,}/g, " ")
     .replace(/[^\S\r\n]+/g, " ")
     .replace(/\n\s*\n\s*\n+/g, "\n\n")
     .replace(/[^\p{L}\p{N}\s()[\].,;:?!+\-=/°%'"£$]/gu, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+export function questionTextQuality(text: string): "good" | "acceptable" | "needs_review" | "failed" {
+  const value = text.trim();
+  if (/\b(answer all questions|write your name|blank page|do not write in this margin|instructions|information)\b/i.test(value)) return "failed";
+  if (value.length < 20 || !/\b(calculate|explain|describe|state|determine|find|show|prove|draw|plot|write|complete|give)\b/i.test(value)) return "needs_review";
+  return value.length >= 50 ? "good" : "acceptable";
+}
+
+function textQualityScore(status: ReturnType<typeof questionTextQuality>) {
+  return status === "good" ? 0.95 : status === "acceptable" ? 0.75 : status === "needs_review" ? 0.35 : 0.10;
 }
 
 export function splitNumberedQuestions(text: string): IndexedQuestion[] {
@@ -134,10 +150,22 @@ async function resolveQuestionPaper(client: SupabaseClient, resource: Processabl
 async function linkAnswerRows(client: SupabaseClient, paperResourceId: number, answers: IndexedQuestion[]) {
   let linked = 0;
   for (const answer of answers) {
-    const { data, error } = await client.from("question_index").update({ answer_text: answer.text, updated_at: new Date().toISOString() })
+    const { data, error } = await client.from("question_index").update({
+      answer_text: answer.text, marking_scheme_link_status: "linked", updated_at: new Date().toISOString(),
+    })
       .eq("resource_id", paperResourceId).eq("question_number", answer.number).select("id");
     if (error) throw error;
-    linked += data?.length ?? 0;
+    if (data?.length) {
+      linked += data.length;
+      continue;
+    }
+    const baseNumber = answer.number.match(/^\d+/)?.[0];
+    if (!baseNumber) continue;
+    const { data: partial, error: partialError } = await client.from("question_index").update({
+      answer_text: answer.text, marking_scheme_link_status: "partial", updated_at: new Date().toISOString(),
+    }).eq("resource_id", paperResourceId).like("question_number", `${baseNumber}(%`).is("answer_text", null).select("id");
+    if (partialError) throw partialError;
+    linked += partial?.length ?? 0;
   }
   return linked;
 }
@@ -207,6 +235,8 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     if (clearQuestionError) throw clearQuestionError;
     const { data: savedQuestions, error: questionError } = await client.from("question_index").insert(numbered.map((question) => {
       const tag = classified.get(question.number);
+      const cleanedText = cleanQuestionText(question.text);
+      const textQuality = questionTextQuality(cleanedText);
       return {
         subject_id: resource.subject_id,
         resource_id: resource.id,
@@ -221,16 +251,21 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         marks: question.marks,
         total_marks: question.marks,
         raw_extracted_text: question.text,
-        clean_question_text: cleanQuestionText(question.text),
-        display_question_text: cleanQuestionText(question.text),
-        question_text: cleanQuestionText(question.text),
+        clean_question_text: cleanedText,
+        display_question_text: cleanedText,
+        question_text: cleanedText,
+        text_quality_status: textQuality,
+        text_quality_score: textQualityScore(textQuality),
+        question_part: question.number.match(/(\(.+\))$/)?.[1] ?? null,
+        marking_scheme_link_status: "unlinked",
         source_file: resource.original_filename,
         syllabus_reference: tag?.syllabusReference ?? null,
         confidence: tag?.confidence ?? 0,
-        needs_review: tag?.needsReview ?? true,
+        needs_review: textQuality === "needs_review" || textQuality === "failed" || (tag?.needsReview ?? true),
         tagging_method: tag?.method ?? "missing_map",
         tagging_note: tag?.note ?? "No topic map found for this subject.",
         topic_classified: Boolean(tag && !tag.needsReview && tag.confidence >= 0.85),
+        student_verified: textQuality !== "needs_review" && textQuality !== "failed" && Boolean(tag && !tag.needsReview && tag.confidence >= 0.60),
       };
     })).select("id,question_number");
     if (questionError) throw questionError;

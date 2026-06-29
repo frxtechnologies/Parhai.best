@@ -277,8 +277,19 @@ export async function renderQuestionPreview(client: SupabaseClient, questionId: 
   let usedBox: Bbox | null = null;
   let status: "generated" | "full_page_fallback" = "full_page_fallback";
   let nonBlankRatio = 0;
+  let rejectedInstructionPages = 0;
   for (const attempt of attempts) {
     const page = await document.getPage(attempt.page);
+    const pageContent = await page.getTextContent();
+    const pageText = pageContent.items.map((item: any) => "str" in item ? item.str : "").join(" ").replace(/\s+/g, " ").toLowerCase();
+    const instructionSignals = [
+      "instructions", "information", "you must answer on the question paper",
+      "answer all questions", "use a black or dark blue pen", "write your name",
+    ].filter((signal) => pageText.includes(signal)).length;
+    if (instructionSignals >= 2 || /\bblank page\b/.test(pageText)) {
+      rejectedInstructionPages += 1;
+      continue;
+    }
     const viewport = page.getViewport({ scale });
     const pageCanvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
     await page.render({ canvasContext: pageCanvas.getContext("2d") as never, viewport, canvas: pageCanvas as never }).promise;
@@ -309,10 +320,13 @@ export async function renderQuestionPreview(client: SupabaseClient, questionId: 
   }
   await document.destroy();
   if (!buffer) {
-    await client.from("question_index").update({ screenshot_status: "failed", updated_at: new Date().toISOString() }).eq("id", question.id);
+    await client.from("question_index").update({ screenshot_status: rejectedInstructionPages ? "failed_page_match" : "failed", updated_at: new Date().toISOString() }).eq("id", question.id);
     throw new Error("Preview crop failed: source page, crop, and nearby pages were blank.");
   }
-  await client.from("question_index").update({ screenshot_status: status, updated_at: new Date().toISOString() }).eq("id", question.id);
+  await client.from("question_index").update({
+    screenshot_status: status, source_page: pageNumber, bbox: usedBox,
+    updated_at: new Date().toISOString(),
+  }).eq("id", question.id);
 
   if (mode === "hybrid_cache") {
     const path = `on-demand/${question.resource_id}/q-${safeSegment(question.question_number, String(question.id))}.png`;

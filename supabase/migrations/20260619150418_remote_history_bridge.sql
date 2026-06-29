@@ -1,0 +1,3 @@
+-- Historical bridge: this migration was applied remotely before the local
+-- migration chain was adopted. Its schema is represented by the local
+-- idempotent migrations. Keep this file so migration histories remain aligned.
