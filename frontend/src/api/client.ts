@@ -631,8 +631,14 @@ async function sendAiAssistantMessage(request: AiAssistantRequest): Promise<AiMe
       board: request.board,
       selectedPaperId: request.selectedPaperId ?? null,
       year: request.year ?? null,
+      session: request.session ?? null,
+      paperNumber: request.paperNumber ?? null,
+      variant: request.variant ?? null,
+      limit: request.limit ?? 10,
+      offset: request.offset ?? 0,
       answerLength: request.answerLength ?? "teacher",
       message: request.message,
+      action: request.action,
       chatHistory: request.chatHistory.slice(-20).map(({ role, content }) => ({ role, content })),
     }),
   });
@@ -644,6 +650,10 @@ async function sendAiAssistantMessage(request: AiAssistantRequest): Promise<AiMe
     role: "assistant",
     content: data.answer,
     sources: data.sources ?? [],
+    intent: data.intent,
+    pagination: data.pagination,
+    searchContext: data.searchContext,
+    analysis: data.analysis,
     createdAt: new Date().toISOString(),
   };
 }

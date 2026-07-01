@@ -217,10 +217,35 @@ function validBox(value: unknown): value is Bbox {
     && Number(box.width) > 10 && Number(box.height) > 10;
 }
 
+export function previewPageAssessment(pageTextInput: string, questionNumber: string, cleanQuestionText = "") {
+  const pageText = pageTextInput.replace(/\s+/g, " ").trim().toLowerCase();
+  const instructionSignals = [
+    "instructions", "information", "you must answer on the question paper",
+    "answer all questions", "use a black or dark blue pen", "write your name",
+    "centre number", "candidate number",
+  ].filter((signal) => pageText.includes(signal)).length;
+  if (/\bblank page\b/.test(pageText)) return { valid: false, reason: "blank_page_detected", score: 0 };
+  if (instructionSignals >= 2 || (pageText.includes("cambridge") && pageText.includes("question paper") && pageText.includes("additional materials"))) {
+    return { valid: false, reason: "front_page_detected", score: 0 };
+  }
+  if (pageText.length < 20 || /^(turn over|ucles|\d+)$/.test(pageText)) {
+    return { valid: false, reason: "blank_page_detected", score: 0 };
+  }
+  const baseNumber = questionNumber.match(/^\d+/)?.[0] ?? questionNumber;
+  const headingPattern = new RegExp(`(?:^|\\s)(?:question\\s+)?${baseNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|\\(|\\.|\\))`, "i");
+  const headingMatch = headingPattern.test(pageText);
+  const keywords = [...new Set(cleanQuestionText.toLowerCase().match(/[a-z]{4,}/g) ?? [])]
+    .filter((word) => !["question", "answer", "marks", "figure", "state", "calculate", "explain", "describe"].includes(word))
+    .slice(0, 12);
+  const keywordMatches = keywords.filter((word) => pageText.includes(word)).length;
+  const keywordScore = keywords.length ? keywordMatches / keywords.length : 0;
+  return { valid: headingMatch || keywordScore >= 0.2, reason: headingMatch || keywordScore >= 0.2 ? null : "page_match_failed", score: (headingMatch ? 0.75 : 0) + keywordScore * 0.25 };
+}
+
 export async function renderQuestionPreview(client: SupabaseClient, questionId: number) {
   if (!screenshotsEnabled()) throw new Error("Question previews are disabled.");
   const { data: question, error } = await client.from("question_index")
-    .select("id,resource_id,question_number,source_page,bbox,screenshot_status,question_screenshot_url,question_screenshot_path,resources!inner(bucket,storage_path)")
+    .select("id,resource_id,question_number,clean_question_text,source_page,bbox,screenshot_status,question_screenshot_url,question_screenshot_path")
     .eq("id", questionId).single();
   if (error || !question) throw new Error(error?.message ?? "Question not found.");
 
@@ -237,7 +262,11 @@ export async function renderQuestionPreview(client: SupabaseClient, questionId: 
     }
   }
 
-  const resource = Array.isArray(question.resources) ? question.resources[0] : question.resources;
+  const { data: resource, error: resourceError } = await client.from("resources")
+    .select("bucket,storage_path")
+    .eq("id", question.resource_id)
+    .single();
+  if (resourceError) throw new Error(resourceError.message);
   if (!resource) throw new Error("Question source PDF is missing.");
   const { data: pdfFile, error: downloadError } = await client.storage.from(resource.bucket).download(resource.storage_path);
   if (downloadError || !pdfFile) throw new Error(downloadError?.message ?? "Could not download source PDF.");
@@ -267,8 +296,8 @@ export async function renderQuestionPreview(client: SupabaseClient, questionId: 
   const attempts = [
     { page: requestedPage, box: exact ? resolvedBox as Bbox : null, fallback: !exact },
     ...(exact ? [{ page: requestedPage, box: null, fallback: true }] : []),
-    { page: requestedPage - 1, box: null, fallback: true },
     { page: requestedPage + 1, box: null, fallback: true },
+    { page: requestedPage - 1, box: null, fallback: true },
   ].filter((attempt, index, all) => attempt.page >= 1 && attempt.page <= document.numPages
     && all.findIndex((candidate) => candidate.page === attempt.page && Boolean(candidate.box) === Boolean(attempt.box)) === index);
 
@@ -278,15 +307,23 @@ export async function renderQuestionPreview(client: SupabaseClient, questionId: 
   let status: "generated" | "full_page_fallback" = "full_page_fallback";
   let nonBlankRatio = 0;
   let rejectedInstructionPages = 0;
+  let bestScore = -1;
+  let failureReason = "page_match_failed";
   for (const attempt of attempts) {
     const page = await document.getPage(attempt.page);
     const pageContent = await page.getTextContent();
     const pageText = pageContent.items.map((item: any) => "str" in item ? item.str : "").join(" ").replace(/\s+/g, " ").toLowerCase();
-    const instructionSignals = [
-      "instructions", "information", "you must answer on the question paper",
-      "answer all questions", "use a black or dark blue pen", "write your name",
-    ].filter((signal) => pageText.includes(signal)).length;
-    if (instructionSignals >= 2 || /\bblank page\b/.test(pageText)) {
+    const assessment = previewPageAssessment(pageText, question.question_number, question.clean_question_text ?? "");
+    if (!assessment.valid) {
+      failureReason = assessment.reason ?? "page_match_failed";
+      if (assessment.reason === "front_page_detected" || assessment.reason === "blank_page_detected") rejectedInstructionPages += 1;
+      continue;
+    }
+    const candidateScore = assessment.score + (attempt.box ? 0.05 : 0);
+    if (candidateScore <= bestScore) {
+      continue;
+    }
+    if (/\bturn over\b/.test(pageText) && pageText.length < 100) {
       rejectedInstructionPages += 1;
       continue;
     }
@@ -311,20 +348,30 @@ export async function renderQuestionPreview(client: SupabaseClient, questionId: 
       if (pixels[offset] < 242 || pixels[offset + 1] < 242 || pixels[offset + 2] < 242) ink += 1;
     }
     nonBlankRatio = sampled ? ink / sampled : 0;
-    if (nonBlankRatio < 0.004) continue;
-    buffer = output.toBuffer("image/png");
+    if (nonBlankRatio < 0.004) {
+      failureReason = "blank_page_detected";
+      continue;
+    }
+    const candidateBuffer = output.toBuffer("image/png");
+    if (candidateScore <= bestScore) continue;
+    buffer = candidateBuffer;
+    bestScore = candidateScore;
     pageNumber = attempt.page;
     usedBox = attempt.box;
     status = attempt.fallback ? "full_page_fallback" : "generated";
-    break;
   }
   await document.destroy();
   if (!buffer) {
-    await client.from("question_index").update({ screenshot_status: rejectedInstructionPages ? "failed_page_match" : "failed", updated_at: new Date().toISOString() }).eq("id", question.id);
+    await client.from("question_index").update({
+      screenshot_status: rejectedInstructionPages || failureReason === "page_match_failed" ? "failed_page_match" : "failed",
+      screenshot_error: failureReason, page_match_score: 0, screenshot_fallback_used: false,
+      updated_at: new Date().toISOString(),
+    }).eq("id", question.id);
     throw new Error("Preview crop failed: source page, crop, and nearby pages were blank.");
   }
   await client.from("question_index").update({
     screenshot_status: status, source_page: pageNumber, bbox: usedBox,
+    screenshot_error: null, page_match_score: bestScore, screenshot_fallback_used: status === "full_page_fallback",
     updated_at: new Date().toISOString(),
   }).eq("id", question.id);
 

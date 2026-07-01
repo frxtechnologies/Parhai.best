@@ -1,10 +1,12 @@
 import { Router, type IRouter } from "express";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireAdmin, requireUser } from "../middleware/auth";
+import { supabaseAdmin } from "../lib/supabase";
 import { processResourceById } from "../services/resource-job";
 import { importLegacyPapers } from "../services/legacy-import";
 import { getResourceDeletionPreview, permanentlyDeleteResource } from "../services/resource-deletion";
 import { generateScreenshotsForResource, renderQuestionPreview, screenshotMode } from "../services/question-screenshots";
+import { renderMarkingSchemePreview } from "../services/marking-scheme-preview";
 
 const router: IRouter = Router();
 
@@ -13,7 +15,8 @@ router.get("/questions/:questionId/screenshot", requireUser, async (req, res): P
   if (!Number.isInteger(questionId) || questionId <= 0) { res.status(400).json({ error: "Invalid question id." }); return; }
   if (screenshotMode() === "off") { res.status(404).json({ error: "Question previews are disabled." }); return; }
   try {
-    const preview = await renderQuestionPreview(res.locals.supabase as SupabaseClient, questionId);
+    const previewClient = process.env.SUPABASE_SERVICE_ROLE_KEY ? supabaseAdmin : res.locals.supabase as SupabaseClient;
+    const preview = await renderQuestionPreview(previewClient, questionId);
     req.log.info({
       questionId, resourcePath: preview.resourcePath, pageRendered: preview.pageNumber,
       bbox: preview.bbox, outputSize: preview.outputSize, screenshotStatus: preview.status,
@@ -25,8 +28,27 @@ router.get("/questions/:questionId/screenshot", requireUser, async (req, res): P
     res.setHeader("Cache-Control", screenshotMode() === "hybrid_cache" ? "public, max-age=86400" : "private, max-age=300");
     res.send(preview.buffer);
   } catch (error) {
-    req.log.warn({ questionId, errorMessage: error instanceof Error ? error.message : String(error) }, "On-demand screenshot failed");
-    res.status(422).json({ error: error instanceof Error ? error.message : "Could not generate question preview." });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const reason = errorMessage.match(/^([a-z_]+):/)?.[1]
+      ?? (errorMessage.toLowerCase().includes("download") ? "pdf_missing"
+        : errorMessage.toLowerCase().includes("source_page") ? "source_page_missing"
+          : errorMessage.toLowerCase().includes("bbox") ? "bbox_missing"
+            : errorMessage.toLowerCase().includes("page_match") ? "page_match_failed"
+              : "render_failed");
+    req.log.warn({ questionId, reason, errorMessage }, "On-demand screenshot failed");
+    res.status(422).json({ error: "Preview unavailable — open PDF instead.", reason });
+  }
+});
+
+router.get("/questions/:questionId/marking-scheme/screenshot",requireUser,async(req,res):Promise<void>=>{
+  const questionId=Number(req.params.questionId);
+  if(!Number.isInteger(questionId)||questionId<=0){res.status(400).json({error:"Invalid question id."});return;}
+  try{
+    const preview=await renderMarkingSchemePreview(process.env.SUPABASE_SERVICE_ROLE_KEY?supabaseAdmin:res.locals.supabase as SupabaseClient,questionId);
+    res.setHeader("Content-Type","image/png");res.setHeader("X-Mark-Scheme-Status",preview.status);res.setHeader("X-Rendered-Page",String(preview.pageNumber));res.setHeader("Cache-Control","private, max-age=300");res.send(preview.buffer);
+  }catch(error){
+    req.log.warn({questionId,error:error instanceof Error?error.message:String(error)},"Marking scheme preview failed");
+    res.status(422).json({error:"Marking scheme preview unavailable — open PDF instead."});
   }
 });
 

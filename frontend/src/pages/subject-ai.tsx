@@ -1,38 +1,421 @@
-import { useClearAiHistory,useGetAiHistory,useGetSubject,useListPapers,useSendAiMessage } from "@/api/client";
-import type { AiMessage } from "@/api/types";
+import {
+  useClearAiHistory,
+  useGetAiHistory,
+  useGetSubject,
+  useListPapers,
+  useSendAiMessage,
+} from "@/api/client";
+import type { AiMessage, TutorAction } from "@/api/types";
 import { AIErrorCard } from "@/components/ai-tutor/ai-error-card";
-import { AIMessage as MessageCard,AIThinkingState } from "@/components/ai-tutor/ai-message";
+import {
+  AIMessage as MessageCard,
+  AIThinkingState,
+} from "@/components/ai-tutor/ai-message";
 import { ChatComposer } from "@/components/ai-tutor/chat-composer";
 import { StudyContextPanel } from "@/components/ai-tutor/study-context-panel";
 import { AppLayout } from "@/components/layout/app-layout";
 import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { exportQuestionWorksheet } from "@/lib/worksheet-export";
-import { ChevronDown,Download,Filter,PanelRight,ShieldCheck,Sparkles,Trash2,X } from "lucide-react";
-import { useEffect,useMemo,useRef,useState } from "react";
-import { useParams } from "wouter";
+import {
+  ChevronDown,
+  Download,
+  Filter,
+  PanelRight,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useParams } from "wouter";
 
-const actions=["Explain like a Cambridge teacher","Give examiner-style answer","Show marking scheme logic","Find similar past-paper questions","Generate 10-question quiz","Show repeated topics","Make a topical worksheet"];
-const starters=["Find Light questions from 2020–2024","Explain 5054_w22_qp_11 Question 5","Generate Electricity practice worksheet","Show most repeated Physics topics"];
-const teacher=(name:string)=>/math/i.test(name)?"Cambridge Mathematics Teacher":`Cambridge ${name} Teacher`;
+const actions = [
+  "Explain like a Cambridge teacher",
+  "Give examiner-style answer",
+  "Show marking scheme logic",
+  "Find similar past-paper questions",
+  "Generate 10-question quiz",
+  "Show repeated topics",
+  "Make a topical worksheet",
+];
+const starters = [
+  "Find Light questions from 2020–2024",
+  "Explain 5054_w22_qp_11 Question 5",
+  "Generate Electricity practice worksheet",
+  "Show most repeated Physics topics",
+];
+const teacher = (name: string) =>
+  /math/i.test(name)
+    ? "Cambridge Mathematics Teacher"
+    : `Cambridge ${name} Teacher`;
 
-export default function SubjectAi(){
-  const subjectId=Number(useParams().id??0),{user}=useAuth(),admin=isAdminEmail(user?.email);
-  const {data:subject,isLoading}=useGetSubject(subjectId),{data:papers=[]}=useListPapers({subjectId}),{data:history=[],isLoading:historyLoading}=useGetAiHistory(subjectId);
-  const send=useSendAiMessage(),clear=useClearAiHistory();
-  const [input,setInput]=useState(""),[paperId,setPaperId]=useState(""),[answerLength,setAnswerLength]=useState<"quick"|"teacher"|"full">("teacher"),[local,setLocal]=useState<AiMessage[]>([]),[failed,setFailed]=useState<{message:string;error:string}|null>(null),[drawer,setDrawer]=useState(false);
-  const end=useRef<HTMLDivElement>(null),messages=useMemo(()=>[...history,...local],[history,local]),paper=papers.find(p=>p.id===Number(paperId)),latest=[...messages].reverse().find(m=>m.role==="assistant"),name=subject?teacher(subject.name):"Cambridge Teacher";
-  useEffect(()=>end.current?.scrollIntoView({behavior:"smooth"}),[messages,send.isPending]);
-  if(isLoading||historyLoading)return <AppLayout><div className="p-12 text-center text-slate-400">Preparing your AI workspace…</div></AppLayout>;
-  if(!subject||!user)return <AppLayout><div className="p-12 text-center">Subject not found.</div></AppLayout>;
-  async function submit(text=input.trim()){if(!text||send.isPending)return;const userMessage:AiMessage={id:`local-${Date.now()}`,subjectId,role:"user",content:text,createdAt:new Date().toISOString()};setLocal(c=>[...c,userMessage]);setInput("");setFailed(null);try{const answer=await send.mutateAsync({userId:user!.id,studentName:user!.name,level:subject!.level,subjectId,subjectName:subject!.name,subjectCode:subject!.code,board:subject!.board,selectedPaperId:paper?.id??null,year:paper?.year??null,session:paper?.session??null,paperNumber:paper?.paperNumber??null,variant:paper?.variant??null,message:text,answerLength,chatHistory:messages});setLocal(c=>[...c,answer])}catch(e){const error=e instanceof Error?e.message:"AI request failed.";setInput(text);setFailed({message:text,error})}}
-  function sourcesOnly(){const sources=latest?.sources??[];setLocal(c=>[...c,{id:`sources-${Date.now()}`,subjectId,role:"assistant",content:sources.length?`I could not generate a full AI answer, but I kept ${sources.length} verified source${sources.length===1?"":"s"} available in the study context panel.`:"The provider is unavailable and no verified sources were returned for this request yet.",sources,createdAt:new Date().toISOString()}]);setFailed(null)}
-  return <AppLayout><div className="-m-4 min-h-[calc(100vh-3.5rem)] bg-slate-50 sm:-m-6 md:min-h-screen">
-    <header className="sticky top-0 z-30 border-b bg-white/90 px-4 py-3 backdrop-blur md:top-0"><div className="mx-auto flex max-w-[1500px] items-center justify-between gap-3"><div><div className="flex items-center gap-2"><h1 className="text-lg font-bold text-[#0B1F3A]">AI Tutor</h1><span className="rounded-full bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-700">AI Online</span>{admin&&<span className="hidden rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-500 sm:inline">Provider debug in AI Testing</span>}</div><p className="text-xs text-slate-500">{subject.name} {subject.code} · Cambridge Teacher</p></div><div className="flex gap-2"><button onClick={()=>setDrawer(true)} className="rounded-lg border p-2 lg:hidden"><PanelRight className="h-4 w-4"/></button><button onClick={()=>{setLocal([]);void clear.mutateAsync({userId:user.id,subjectId})}} disabled={!messages.length} className="rounded-lg border p-2 text-slate-500 disabled:opacity-30" title="Clear conversation"><Trash2 className="h-4 w-4"/></button></div></div></header>
-    <div className="mx-auto grid max-w-[1500px] lg:grid-cols-[minmax(0,1fr)_340px]"><main className="flex min-h-[calc(100vh-70px)] flex-col border-r border-slate-200"><div className="border-b bg-white px-4 py-3"><div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2"><Filter className="h-4 w-4 text-slate-400"/><select value={paperId} onChange={e=>setPaperId(e.target.value)} className="rounded-lg border bg-white px-3 py-2 text-xs"><option value="">All {subject.name} papers</option>{papers.map(p=><option key={p.id} value={p.id}>{p.year} {p.session.replace("_"," ")} · P{p.paperNumber} · V{p.variant??"—"}</option>)}</select><select value={answerLength} onChange={e=>setAnswerLength(e.target.value as typeof answerLength)} className="rounded-lg border bg-white px-3 py-2 text-xs"><option value="quick">Quick answer</option><option value="teacher">Teacher explanation</option><option value="full">Full exam breakdown</option></select>{latest?.sources?.some(s=>s.sourceType==="question")&&<><button onClick={()=>void exportQuestionWorksheet(`${subject.name} worksheet`,latest.sources??[],false)} className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-semibold"><Download className="h-3 w-3"/>PDF</button><button onClick={()=>void exportQuestionWorksheet(`${subject.name} worksheet with answers`,latest.sources??[],true)} className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-semibold">PDF + answers</button></>}<button className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs text-slate-500">More filters <ChevronDown className="h-3 w-3"/></button></div></div>
-      <div className="flex-1 overflow-y-auto px-4 py-8 sm:px-6"><div className="mx-auto max-w-4xl">{!messages.length?<div className="mx-auto max-w-2xl py-12 text-center"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0B1F3A] text-white shadow-lg"><Sparkles className="h-6 w-6"/></div><h2 className="mt-5 text-2xl font-bold text-[#0B1F3A]">Ask your {name}</h2><p className="mt-2 text-slate-500">Search past papers, understand marking schemes, generate topical practice, and revise smarter.</p><div className="mt-8 grid gap-3 sm:grid-cols-2">{starters.map(s=><button key={s} onClick={()=>setInput(s)} className="rounded-2xl border bg-white p-4 text-left text-sm font-medium text-[#0B1F3A] shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md">{s}</button>)}</div></div>:<div className="space-y-6">{messages.map(m=><MessageCard key={m.id} message={m} onExplain={setInput}/>)}</div>}{send.isPending&&<div className="mt-6"><AIThinkingState/></div>}{failed&&<div className="mt-6"><AIErrorCard error={failed.error} onRetry={()=>submit(failed.message)} onSourcesOnly={sourcesOnly} isAdmin={admin}/></div>}<div ref={end}/></div></div>
-      <div className="px-4"><div className="mx-auto flex max-w-4xl gap-2 overflow-x-auto pb-1">{actions.map(a=><button key={a} onClick={()=>setInput(a)} className="shrink-0 rounded-full border bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-teal-300 hover:text-teal-700">{a}</button>)}</div></div><ChatComposer value={input} onChange={setInput} onSend={()=>submit()} pending={send.isPending} placeholder={`Ask your ${name} about a concept, revision, or past paper…`}/>
-    </main><div className="hidden p-4 lg:block"><StudyContextPanel subject={subject} paper={paper} sources={latest?.sources??[]}/></div></div>
-    {drawer&&<div className="fixed inset-0 z-50 lg:hidden"><button aria-label="Close study context" onClick={()=>setDrawer(false)} className="absolute inset-0 bg-slate-950/30"/><div className="absolute right-0 top-0 h-full w-[min(90vw,380px)] overflow-y-auto bg-slate-50 p-4 shadow-2xl"><div className="mb-4 flex items-center justify-between"><b>Study context</b><button onClick={()=>setDrawer(false)} className="rounded-lg border p-2"><X className="h-4 w-4"/></button></div><StudyContextPanel subject={subject} paper={paper} sources={latest?.sources??[]}/>{admin&&<a href="/admin/ai-testing" className="mt-4 flex items-center gap-2 rounded-xl border bg-white p-3 text-sm font-semibold"><ShieldCheck className="h-4 w-4"/>Admin AI diagnostics</a>}</div></div>}
-  </div></AppLayout>
+export default function SubjectAi() {
+  const subjectId = Number(useParams().id ?? 0),
+    { user } = useAuth(),
+    admin = isAdminEmail(user?.email);
+  const { data: subject, isLoading } = useGetSubject(subjectId),
+    { data: papers = [] } = useListPapers({ subjectId }),
+    { data: history = [], isLoading: historyLoading } =
+      useGetAiHistory(subjectId);
+  const send = useSendAiMessage(),
+    clear = useClearAiHistory();
+  const [input, setInput] = useState(""),
+    [paperId, setPaperId] = useState(""),
+    [answerLength, setAnswerLength] = useState<"quick" | "teacher" | "full">(
+      "teacher",
+    ),
+    [local, setLocal] = useState<AiMessage[]>([]),
+    [failed, setFailed] = useState<{ message: string; error: string } | null>(
+      null,
+    ),
+    [drawer, setDrawer] = useState(false),
+    [schemeOnly, setSchemeOnly] = useState(false);
+  const end = useRef<HTMLDivElement>(null),
+    messages = useMemo(() => [...history, ...local], [history, local]),
+    paper = papers.find((p) => p.id === Number(paperId)),
+    latest = [...messages].reverse().find((m) => m.role === "assistant"),
+    name = subject ? teacher(subject.name) : "Cambridge Teacher";
+  useEffect(
+    () => end.current?.scrollIntoView({ behavior: "smooth" }),
+    [messages, send.isPending],
+  );
+  if (isLoading || historyLoading)
+    return (
+      <AppLayout>
+        <div className="p-12 text-center text-slate-400">
+          Preparing your AI workspace…
+        </div>
+      </AppLayout>
+    );
+  if (!subject || !user)
+    return (
+      <AppLayout>
+        <div className="p-12 text-center">Subject not found.</div>
+      </AppLayout>
+    );
+  async function submit(text = input.trim()) {
+    if (!text || send.isPending) return;
+    const activeSearch=latest?.intent==="question_search"?latest:null;
+    const showMore=/^(?:show|load)\s+more\b/i.test(text);
+    const refineHard=/\bonly\s+hard|hard\s+ones?\b/i.test(text);
+    const refineEasy=/\bonly\s+easy|easy\s+ones?\b/i.test(text);
+    const contextualTopic=activeSearch?.searchContext?.topic;
+    const requestText=showMore&&contextualTopic
+      ? `Give me ${contextualTopic} questions`
+      : (refineHard||refineEasy)&&contextualTopic
+        ? `Give me ${refineHard?"hard":"easy"} ${contextualTopic} questions`
+        : text;
+    const offset=showMore&&activeSearch?.pagination
+      ? activeSearch.pagination.offset+activeSearch.pagination.limit
+      : 0;
+    const userMessage: AiMessage = {
+      id: `local-${Date.now()}`,
+      subjectId,
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+    setLocal((c) => [...c, userMessage]);
+    setInput("");
+    setFailed(null);
+    try {
+      const answer = await send.mutateAsync({
+        userId: user!.id,
+        studentName: user!.name,
+        level: subject!.level,
+        subjectId,
+        subjectName: subject!.name,
+        subjectCode: subject!.code,
+        board: subject!.board,
+        selectedPaperId: paper?.id ?? null,
+        year: paper?.year ?? null,
+        session: paper?.session ?? null,
+        paperNumber: paper?.paperNumber ?? null,
+        variant: paper?.variant ?? null,
+        message: requestText,
+        limit: 10,
+        offset,
+        answerLength,
+        chatHistory: messages,
+      });
+      setLocal((c) => [...c, answer]);
+    } catch (e) {
+      const error = e instanceof Error ? e.message : "AI request failed.";
+      setInput(text);
+      setFailed({ message: text, error });
+    }
+  }
+  async function handleStructuredTutorAction(action:TutorAction,label:string) {
+    if(send.isPending) return;
+    setLocal(c=>[...c,{id:`action-${Date.now()}`,subjectId,role:"user",content:label,createdAt:new Date().toISOString()}]);
+    setFailed(null);
+    try {
+      const answer=await send.mutateAsync({
+        userId:user!.id,studentName:user!.name,level:subject!.level,subjectId,
+        subjectName:subject!.name,subjectCode:subject!.code,board:subject!.board,
+        message:label,action,limit:10,offset:action.type==="load_more"?action.offset:0,
+        answerLength,chatHistory:messages,
+      });
+      setLocal(c=>[...c,answer]);
+    } catch(e) {
+      setFailed({message:label,error:e instanceof Error?e.message:"Structured tutor action failed."});
+    }
+  }
+  function sourcesOnly() {
+    const sources = latest?.sources ?? [];
+    setLocal((c) => [
+      ...c,
+      {
+        id: `sources-${Date.now()}`,
+        subjectId,
+        role: "assistant",
+        content: sources.length
+          ? `I could not generate a full AI answer, but I kept ${sources.length} verified source${sources.length === 1 ? "" : "s"} available in the study context panel.`
+          : "The provider is unavailable and no verified sources were returned for this request yet.",
+        sources,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    setFailed(null);
+  }
+  return (
+    <AppLayout>
+      <div className="-m-4 min-h-[calc(100vh-3.5rem)] bg-slate-50 sm:-m-6 md:min-h-screen">
+        <header className="sticky top-0 z-30 border-b bg-white/90 px-4 py-3 backdrop-blur md:top-0">
+          <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg font-bold text-[#0B1F3A]">AI Tutor</h1>
+                <span className="rounded-full bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-700">
+                  AI Online
+                </span>
+                {admin && (
+                  <span className="hidden rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-500 sm:inline">
+                    Provider debug in AI Testing
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500">
+                {subject.name} {subject.code} · Cambridge Teacher
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setDrawer(true)}
+                className="rounded-lg border p-2 lg:hidden"
+              >
+                <PanelRight className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => {
+                  setLocal([]);
+                  void clear.mutateAsync({ userId: user.id, subjectId });
+                }}
+                disabled={!messages.length}
+                className="rounded-lg border p-2 text-slate-500 disabled:opacity-30"
+                title="Clear conversation"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </header>
+        <div className="mx-auto grid max-w-[1500px] lg:grid-cols-[minmax(0,1fr)_340px]">
+          <main className="flex min-h-[calc(100vh-70px)] flex-col border-r border-slate-200">
+            <div className="border-b bg-white px-4 py-3">
+              <div className="mx-auto flex max-w-4xl flex-wrap items-center gap-2">
+                <Filter className="h-4 w-4 text-slate-400" />
+                <select
+                  value={paperId}
+                  onChange={(e) => setPaperId(e.target.value)}
+                  className="rounded-lg border bg-white px-3 py-2 text-xs"
+                >
+                  <option value="">All {subject.name} papers</option>
+                  {papers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.year} {p.session.replace("_", " ")} · P{p.paperNumber}{" "}
+                      · V{p.variant ?? "—"}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={answerLength}
+                  onChange={(e) =>
+                    setAnswerLength(e.target.value as typeof answerLength)
+                  }
+                  className="rounded-lg border bg-white px-3 py-2 text-xs"
+                >
+                  <option value="quick">Quick answer</option>
+                  <option value="teacher">Teacher explanation</option>
+                  <option value="full">Full exam breakdown</option>
+                </select>
+                {latest?.sources?.some((s) => s.sourceType === "question") && (
+                  <>
+                    <button
+                      onClick={() =>
+                        void exportQuestionWorksheet(
+                          `${subject.name} worksheet`,
+                          latest.sources ?? [],
+                          false,
+                        )
+                      }
+                      className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-semibold"
+                    >
+                      <Download className="h-3 w-3" />
+                      PDF
+                    </button>
+                    <button
+                      onClick={() =>
+                        void exportQuestionWorksheet(
+                          `${subject.name} worksheet with answers`,
+                          latest.sources ?? [],
+                          true,
+                        )
+                      }
+                      className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-semibold"
+                    >
+                      PDF + answers
+                    </button>
+                  </>
+                )}
+                <button className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs text-slate-500">
+                  More filters <ChevronDown className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-8 sm:px-6">
+              <div className="mx-auto max-w-5xl">
+                {!messages.length ? (
+                  <div className="mx-auto max-w-2xl py-12 text-center">
+                    <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0B1F3A] text-white shadow-lg">
+                      <Sparkles className="h-6 w-6" />
+                    </div>
+                    <h2 className="mt-5 text-2xl font-bold text-[#0B1F3A]">
+                      Ask your {name}
+                    </h2>
+                    <p className="mt-2 text-slate-500">
+                      Search past papers, understand marking schemes, generate
+                      topical practice, and revise smarter.
+                    </p>
+                    <div className="mt-8 grid gap-3 sm:grid-cols-2">
+                      {starters.map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => setInput(s)}
+                          className="rounded-2xl border bg-white p-4 text-left text-sm font-medium text-[#0B1F3A] shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md"
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {messages.map((m) => (
+                      <MessageCard
+                        key={m.id}
+                        message={m}
+                        onExplain={setInput}
+                        onAction={handleStructuredTutorAction}
+                        adminDebug={admin}
+                        schemeOnly={schemeOnly}
+                      />
+                    ))}
+                  </div>
+                )}
+                {send.isPending && (
+                  <div className="mt-6">
+                    <AIThinkingState />
+                  </div>
+                )}
+                {failed && (
+                  <div className="mt-6">
+                    <AIErrorCard
+                      error={failed.error}
+                      onRetry={() => submit(failed.message)}
+                      onSourcesOnly={sourcesOnly}
+                      isAdmin={admin}
+                    />
+                  </div>
+                )}
+                <div ref={end} />
+              </div>
+            </div>
+            <div className="px-4">
+              <div className="mx-auto flex max-w-4xl gap-2 overflow-x-auto pb-1">
+                <Link
+                  href="/paper-checker"
+                  className="shrink-0 rounded-full bg-[#0B1F3A] px-3 py-2 text-xs font-semibold text-white"
+                >
+                  Open Paper Checker
+                </Link>
+                {actions.map((a) => (
+                  <button
+                    key={a}
+                    onClick={() => setInput(a)}
+                    className="shrink-0 rounded-full border bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-teal-300 hover:text-teal-700"
+                  >
+                    {a}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ChatComposer
+              value={input}
+              onChange={setInput}
+              onSend={() => submit()}
+              pending={send.isPending}
+              placeholder={`Ask your ${name} about a concept, revision, or past paper…`}
+            />
+          </main>
+          <div className="hidden p-4 lg:block">
+            <StudyContextPanel
+              subject={subject}
+              paper={paper}
+              sources={latest?.sources ?? []}
+              schemeOnly={schemeOnly}
+              onSchemeOnlyChange={setSchemeOnly}
+            />
+          </div>
+        </div>
+        {drawer && (
+          <div className="fixed inset-0 z-50 lg:hidden">
+            <button
+              aria-label="Close study context"
+              onClick={() => setDrawer(false)}
+              className="absolute inset-0 bg-slate-950/30"
+            />
+            <div className="absolute right-0 top-0 h-full w-[min(90vw,380px)] overflow-y-auto bg-slate-50 p-4 shadow-2xl">
+              <div className="mb-4 flex items-center justify-between">
+                <b>Study context</b>
+                <button
+                  onClick={() => setDrawer(false)}
+                  className="rounded-lg border p-2"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <StudyContextPanel
+                subject={subject}
+                paper={paper}
+                sources={latest?.sources ?? []}
+                schemeOnly={schemeOnly}
+                onSchemeOnlyChange={setSchemeOnly}
+              />
+              {admin && (
+                <a
+                  href="/admin/ai-testing"
+                  className="mt-4 flex items-center gap-2 rounded-xl border bg-white p-3 text-sm font-semibold"
+                >
+                  <ShieldCheck className="h-4 w-4" />
+                  Admin AI diagnostics
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </AppLayout>
+  );
 }

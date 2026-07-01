@@ -1,5 +1,6 @@
 import { useListSubjects, getListSubjectsQueryKey } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
+import { SubjectMark } from "@/components/subject-mark";
 import { Link } from "wouter";
 import { FileText, HelpCircle, PenLine } from "lucide-react";
 import { useState } from "react";
@@ -22,21 +23,22 @@ export default function Subjects() {
   return (
     <AppLayout>
       <div className="space-y-8">
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <header className="flex flex-col gap-5 rounded-[28px] bg-[#0B1F3A] p-6 text-white shadow-[0_24px_60px_rgba(11,31,58,.16)] md:flex-row md:items-center md:justify-between md:p-8">
           <div>
-            <h1 className="text-3xl font-bold text-[#0B1F3A] mb-2">Subjects</h1>
-            <p className="text-gray-500">Browse materials and resources by subject.</p>
+            <p className="text-xs font-semibold uppercase tracking-[.18em] text-cyan-200">Your Cambridge courses</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight">Choose a subject</h1>
+            <p className="mt-2 text-sm text-slate-300">Past papers, topical questions, notes, and your AI teacher in one place.</p>
           </div>
 
-          <div className="flex rounded-xl border bg-white p-1 gap-1 w-full md:w-auto">
+          <div className="flex w-full gap-1 rounded-xl border border-white/15 bg-white/10 p-1 md:w-auto">
             {LEVELS.map((l) => (
               <button
                 key={l}
                 onClick={() => setLevel(l)}
                 className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   level === l
-                    ? "bg-[#0B1F3A] text-white shadow-sm"
-                    : "text-gray-500 hover:text-[#0B1F3A]"
+                    ? "bg-white text-[#0B1F3A] shadow-sm"
+                    : "text-slate-300 hover:bg-white/10 hover:text-white"
                 }`}
               >
                 {l === "ALL" ? "All" : l === "O_LEVEL" ? "O Level" : "A Level"}
@@ -48,7 +50,7 @@ export default function Subjects() {
         {isLoading ? (
           <div className="flex justify-center p-12 text-gray-400">Loading subjects...</div>
         ) : (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
             {subjects?.map((subject, idx) => (
               <motion.div
                 key={subject.id}
@@ -57,36 +59,35 @@ export default function Subjects() {
                 transition={{ delay: idx * 0.05 }}
               >
                 <Link href={`/subject/${subject.id}`}>
-                  <div
-                    className="bg-white hover:shadow-lg transition-all cursor-pointer h-full border-t-4 overflow-hidden rounded-xl border group p-6"
-                    style={{ borderTopColor: subject.color }}
-                  >
-                    <div className="flex justify-between items-start mb-6">
-                      <div>
-                        <h3 className="font-bold text-xl text-[#0B1F3A] mb-1 group-hover:text-[#0B1F3A] transition-colors">
+                  <div className="group h-full cursor-pointer overflow-hidden rounded-2xl border border-white/80 bg-white p-5 shadow-[0_8px_30px_rgba(15,23,42,.05)] ring-1 ring-slate-200/60 transition-all hover:-translate-y-1 hover:shadow-[0_20px_50px_rgba(15,23,42,.1)]">
+                    <div className="mb-6 flex items-start justify-between">
+                      <div className="flex items-center gap-4">
+                        <SubjectMark name={subject.name} size="lg"/>
+                        <div><h3 className="text-xl font-semibold text-[#0B1F3A] transition-colors">
                           {subject.name}
                         </h3>
-                        <span className="text-sm font-mono text-gray-400">{subject.code}</span>
+                        <span className="mt-1 block text-xs font-semibold uppercase tracking-wider text-slate-400">Syllabus {subject.code}</span></div>
                       </div>
-                      <div className="px-2 py-1 bg-gray-100 rounded text-xs font-medium text-gray-500">
+                      <div className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
                         {subject.level === "O_LEVEL" ? "O Level" : "A Level"}
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="flex items-center gap-2 text-sm text-gray-400">
+                    <div className="grid grid-cols-3 divide-x divide-slate-100 rounded-xl bg-slate-50 p-3">
+                      <div className="flex flex-col items-center gap-1 text-xs text-slate-500">
                         <FileText className="h-4 w-4" style={{ color: subject.color }} />
-                        <span>{subject.totalPapers} Papers</span>
+                        <b className="text-base text-[#0B1F3A]">{subject.totalPapers}</b><span>Papers</span>
                       </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-400">
+                      <div className="flex flex-col items-center gap-1 text-xs text-slate-500">
                         <HelpCircle className="h-4 w-4" style={{ color: subject.color }} />
-                        <span>{subject.totalQuestions} Qs</span>
+                        <b className="text-base text-[#0B1F3A]">{subject.totalQuestions}</b><span>Questions</span>
                       </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-400">
+                      <div className="flex flex-col items-center gap-1 text-xs text-slate-500">
                         <PenLine className="h-4 w-4" style={{ color: subject.color }} />
-                        <span>{subject.totalNotes} Notes</span>
+                        <b className="text-base text-[#0B1F3A]">{subject.totalNotes}</b><span>Notes</span>
                       </div>
                     </div>
+                    <div className="mt-4 flex items-center justify-between text-sm font-semibold text-teal-700"><span>Open study workspace</span><span className="transition group-hover:translate-x-1">→</span></div>
                   </div>
                 </Link>
               </motion.div>

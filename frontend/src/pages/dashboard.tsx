@@ -1,5 +1,6 @@
 import { getGetDashboardQueryKey, useGetDashboard, useListNotes, useListPapers, useListQuestions } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
+import { SubjectMark } from "@/components/subject-mark";
 import { useAuth } from "@/context/auth-context";
 import {
   ArrowRight,
@@ -59,38 +60,40 @@ export default function Dashboard() {
   return (
     <AppLayout>
       <div className="space-y-6 pb-8">
-        <header className="flex flex-col gap-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/40 sm:p-7 lg:flex-row lg:items-center lg:justify-between">
+        <header className="relative isolate overflow-hidden rounded-[28px] bg-[#0B1F3A] p-6 text-white shadow-[0_24px_60px_rgba(11,31,58,.18)] sm:p-8 lg:flex lg:items-center lg:justify-between lg:gap-8">
+          <div className="absolute -right-24 -top-32 -z-10 h-80 w-80 rounded-full bg-cyan-400/20 blur-3xl" />
+          <div className="absolute bottom-0 right-[30%] -z-10 h-40 w-40 rounded-full bg-emerald-400/10 blur-3xl" />
           <div>
-            <p className="text-sm font-medium text-teal-700">Student dashboard</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[#0B1F3A] sm:text-3xl">
+            <p className="text-xs font-semibold uppercase tracking-[.18em] text-cyan-200">Your study command centre</p>
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
               Welcome back{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
               Pick up where you left off, review your subjects, and prepare for your next Cambridge exam.
             </p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="mt-6 flex flex-col gap-2 sm:flex-row lg:mt-0">
             {continueSubject && (
-              <Link href={`/subject/${continueSubject.subjectId}`} className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#142f50]">
+              <Link href={`/subject/${continueSubject.subjectId}`} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-semibold text-[#0B1F3A] shadow-lg shadow-black/10 transition hover:-translate-y-0.5">
                 Continue studying <ArrowRight className="h-4 w-4" />
               </Link>
             )}
-            <Link href="/onboarding" className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-[#0B1F3A] transition hover:bg-slate-50">
+            <Link href="/onboarding" className="inline-flex items-center justify-center rounded-xl border border-white/20 bg-white/10 px-5 py-3 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15">
               Manage subjects
             </Link>
           </div>
         </header>
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           {stats.map((stat) => (
-            <article key={stat.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/30">
+            <article key={stat.label} className="group rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_8px_30px_rgba(15,23,42,.05)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_40px_rgba(15,23,42,.08)] sm:p-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-sm font-medium text-slate-500">{stat.label}</p>
-                  <p className="mt-2 text-3xl font-semibold tracking-tight text-[#0B1F3A]">{stat.value}</p>
-                  <p className="mt-1 text-xs text-slate-400">{stat.detail}</p>
+                  <p className="text-xs font-medium text-slate-500 sm:text-sm">{stat.label}</p>
+                  <p className="mt-2 text-2xl font-semibold tracking-tight text-[#0B1F3A] sm:text-3xl">{stat.value}</p>
+                  <p className="mt-1 hidden text-xs text-slate-400 sm:block">{stat.detail}</p>
                 </div>
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+                <span className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-50 text-cyan-700 transition group-hover:scale-105 sm:flex">
                   <stat.icon className="h-5 w-5" />
                 </span>
               </div>
@@ -103,9 +106,7 @@ export default function Dashboard() {
             <SectionHeading eyebrow="Continue learning" title={continueSubject?.subjectName ?? "Choose your first subject"} action={continueSubject ? <Link href={`/subject/${continueSubject.subjectId}`} className="text-sm font-semibold text-teal-700">Open subject</Link> : undefined} />
             {continueSubject ? (
               <div className="mt-5 grid gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-xl text-lg font-semibold text-white" style={{ backgroundColor: continueSubject.subjectColor || "#0B1F3A" }}>
-                  {continueSubject.subjectName.charAt(0)}
-                </div>
+                <SubjectMark name={continueSubject.subjectName} size="lg"/>
                 <div>
                   <div className="flex items-center justify-between gap-3 text-sm">
                     <span className="font-medium text-[#0B1F3A]">Course progress</span>
@@ -149,7 +150,7 @@ export default function Dashboard() {
                 <Link key={subject.subjectId} href={`/subject/${subject.subjectId}`} className="group rounded-xl border border-slate-200 p-4 transition hover:border-slate-300 hover:shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <span className="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-semibold text-white" style={{ backgroundColor: subject.subjectColor || "#0B1F3A" }}>{subject.subjectName.charAt(0)}</span>
+                      <SubjectMark name={subject.subjectName} size="sm"/>
                       <div><h3 className="font-semibold text-[#0B1F3A]">{subject.subjectName}</h3><p className="text-xs text-slate-400">{subject.hoursStudied} hours studied</p></div>
                     </div>
                     <ArrowRight className="h-4 w-4 text-slate-300 transition group-hover:text-teal-700" />
@@ -225,7 +226,7 @@ function getTopPhysicsTopics(questions: Array<{ subjectName: string; topic: stri
 }
 
 function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <section className={`rounded-xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/30 sm:p-6 ${className}`}>{children}</section>;
+  return <section className={`rounded-2xl border border-white/80 bg-white/90 p-5 shadow-[0_8px_30px_rgba(15,23,42,.05)] ring-1 ring-slate-200/60 sm:p-6 ${className}`}>{children}</section>;
 }
 
 function SectionHeading({ eyebrow, title, action }: { eyebrow: string; title: string; action?: React.ReactNode }) {

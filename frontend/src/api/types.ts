@@ -122,12 +122,35 @@ export interface AiMessage {
   role: "user" | "assistant";
   content: string;
   sources?: AiSource[];
+  intent?: string;
+  pagination?: { total:number;limit:number;offset:number;hasMore?:boolean };
+  searchContext?: AiSearchContext;
+  analysis?: PaperAnalysis;
   createdAt: string;
+}
+
+export interface PaperAnalysis {
+  overview?: {
+    subjectCode:string;year:number;session:string;paperNumber:number;variant:number;
+    totalIndexedQuestions:number;verifiedQuestions:number;totalMarks:number;
+    markingSchemeLinked:number;markingSchemeMissing:number;screenshotsAvailable:number;
+    completeness:"complete"|"partial";
+  };
+  topics?: Array<{topic:string;questions:number;marks:number;percentageOfMarks:number;averageDifficulty:string;markingSchemeLinked:number;subtopics:Record<string,number>}>;
+  difficulty?: Record<string,{questions:number;marks:number}>;
+  highValueTopics?: Array<{topic:string;priority:string;reason:string}>;
+  revisionRecommendation?: string[];
 }
 
 export interface AiSource {
   chunkId: number;
-  sourceType: "resource" | "paper" | "question" | "topic" | "marking_scheme" | "note";
+  sourceType:
+    | "resource"
+    | "paper"
+    | "question"
+    | "topic"
+    | "marking_scheme"
+    | "note";
   paperId: number | null;
   year: number | null;
   session: string | null;
@@ -135,14 +158,27 @@ export interface AiSource {
   questionNumber: string | null;
   screenshotUrl?: string | null;
   screenshotStatus?: string | null;
+  screenshotError?: string | null;
+  pageMatchScore?: number | null;
+  screenshotFallbackUsed?: boolean | null;
   bbox?: { x: number; y: number; width: number; height: number } | null;
   filePath?: string | null;
   confidence?: number | null;
   needsReview?: boolean | null;
   questionText?: string | null;
   answerText?: string | null;
+  markingSchemeLinkStatus?:
+    | "linked"
+    | "partial"
+    | "unlinked"
+    | "needs_review"
+    | null;
+  markingSchemeResourceId?: number | null;
   sourcePage?: number | null;
   resourceId?: number | null;
+  resourceType?: string | null;
+  subjectName?: string | null;
+  subjectCode?: string | null;
   variant?: number | null;
   topic?: string | null;
   subtopic?: string | null;
@@ -151,6 +187,11 @@ export interface AiSource {
   sourceFile?: string | null;
   reference: string;
 }
+
+export type TutorAction =
+  | {type:"paper_analysis"|"show_questions_from_paper";subjectCode:string;year:number;session:string;paperNumber:number;variant:number;resourceId?:number}
+  | {type:"explain_question"|"show_marking_scheme";questionId:number}
+  | {type:"load_more";queryState:AiSearchContext;offset:number;limit:number};
 
 export interface OnboardInput {
   level: "O_LEVEL" | "A_LEVEL";
@@ -244,7 +285,10 @@ export interface AiAssistantRequest {
   session?: "MAY_JUNE" | "OCT_NOV" | "FEB_MAR" | null;
   paperNumber?: number | null;
   variant?: number | null;
+  limit?: number;
+  offset?: number;
   message: string;
+  action?: TutorAction;
   answerLength?: "quick" | "teacher" | "full";
   chatHistory: AiMessage[];
 }
@@ -252,4 +296,21 @@ export interface AiAssistantRequest {
 export interface AiAssistantResponse {
   answer: string;
   sources: AiSource[];
+  intent?: string;
+  pagination?: { total:number;limit:number;offset:number;hasMore?:boolean };
+  searchContext?: AiSearchContext;
+  analysis?: PaperAnalysis;
+}
+
+export interface AiSearchContext {
+  subjectCode:string;
+  topic:string|null;
+  year:number|null;
+  yearFrom:number|null;
+  yearTo:number|null;
+  session:string|null;
+  paperNumber:number|null;
+  variant:number|null;
+  difficulty:string|null;
+  markingSchemeOnly:boolean;
 }

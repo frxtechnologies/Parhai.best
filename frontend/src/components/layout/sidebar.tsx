@@ -17,6 +17,7 @@ import {
   FlaskConical,
   RefreshCw,
   Tags,
+  ClipboardCheck,
 } from "lucide-react";
 
 function cn(...classes: (string | boolean | undefined)[]) {
@@ -30,6 +31,7 @@ const NAV_ITEMS = [
   { label: "Notes", href: "/notes", icon: FilePenLine },
   { label: "Questions", href: "/questions", icon: HelpCircle },
   { label: "AI Tutor", href: "/ai", icon: Bot },
+  { label: "Paper Checker", href: "/paper-checker", icon: ClipboardCheck },
   { label: "Progress", href: "/progress", icon: LineChart },
 ];
 
@@ -52,30 +54,34 @@ export function Sidebar() {
     <Link
       href={item.href}
       className={cn(
-        "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+        "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
         location === item.href || location.startsWith(item.href + "/")
-          ? "bg-[#0B1F3A]/10 text-[#0B1F3A]"
-          : "text-gray-500 hover:bg-gray-100 hover:text-[#0B1F3A]"
+          ? "bg-white text-[#0B1F3A] shadow-[0_6px_20px_rgba(15,23,42,.08)] ring-1 ring-slate-200/80"
+          : "text-slate-500 hover:bg-white/70 hover:text-[#0B1F3A]"
       )}
     >
-      <item.icon className="h-5 w-5" />
-      {item.label}
+      <item.icon className={cn("h-[18px] w-[18px] transition-colors", location === item.href || location.startsWith(item.href + "/") ? "text-cyan-600" : "text-slate-400 group-hover:text-cyan-600")} />
+      <span className="flex-1">{item.label}</span>
+      {(location === item.href || location.startsWith(item.href + "/")) && <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" />}
     </Link>
   );
 
   const content = (
-    <div className="flex h-full flex-col border-r border-slate-200/80 bg-white">
-      <div className="p-6">
-        <BrandLogo href="/dashboard" imageClassName="h-12 w-auto" />
+    <div className="flex h-full flex-col border-r border-slate-200/70 bg-slate-50/95 backdrop-blur-xl">
+      <div className="px-5 pb-5 pt-6">
+        <BrandLogo href="/dashboard" imageClassName="h-11 w-auto" />
+        <p className="mt-3 text-[10px] font-semibold uppercase tracking-[.18em] text-slate-400">Cambridge study workspace</p>
       </div>
 
-      <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3">
+        <p className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[.16em] text-slate-400">Study</p>
         {NAV_ITEMS.map((item) => (
           <NavLink key={item.href} item={item} />
         ))}
 
         {isAdmin && (
-          <div className="my-2 border-t pt-2">
+          <div className="my-3 border-t border-slate-200/80 pt-3">
+            <p className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[.16em] text-slate-400">Administration</p>
             {ADMIN_ITEMS.map((item) => (
               <NavLink key={item.href} item={item} />
             ))}
@@ -84,8 +90,8 @@ export function Sidebar() {
       </nav>
 
       {user && (
-        <div className="p-4 border-t">
-          <div className="flex items-center justify-between mb-4 px-2 py-1.5 bg-orange-50 rounded-md">
+        <div className="border-t border-slate-200/80 p-3">
+          <div className="mb-3 flex items-center justify-between rounded-xl bg-gradient-to-r from-orange-50 to-amber-50 px-3 py-2 ring-1 ring-orange-100">
             <div className="flex items-center gap-2">
               <Flame className="h-4 w-4 text-orange-500 fill-orange-500" />
               <span className="text-xs font-medium text-orange-700">
@@ -94,8 +100,8 @@ export function Sidebar() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-[#0B1F3A]/10 flex items-center justify-center text-[#0B1F3A] font-bold text-sm shrink-0">
+          <div className="flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-white">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#0B1F3A] text-sm font-bold text-white shadow-sm">
               {user.name.charAt(0)}
             </div>
             <div className="flex-1 min-w-0">
@@ -119,10 +125,10 @@ export function Sidebar() {
 
   return (
     <>
-      <div className="hidden md:flex h-screen w-64 flex-col fixed inset-y-0 z-50">
+      <div className="fixed inset-y-0 z-50 hidden h-screen w-[248px] flex-col md:flex">
         {content}
       </div>
-      <div className="md:hidden flex h-14 items-center border-b border-slate-200/80 px-4 bg-white sticky top-0 z-40">
+      <div className="sticky top-0 z-40 flex h-14 items-center border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur md:hidden">
         <MobileMenu content={content} />
         <BrandLogo href="/dashboard" className="ml-2" imageClassName="h-8 w-auto" />
       </div>

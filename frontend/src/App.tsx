@@ -23,6 +23,7 @@ import AdminResources from "@/pages/admin-resources";
 import AdminProcessing from "@/pages/admin-processing";
 import TopicMapManager from "@/pages/topic-map-manager";
 import NotFound from "@/pages/not-found";
+import PaperChecker from "@/pages/paper-checker";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -50,6 +51,7 @@ function Router() {
       <Route path="/questions" component={Questions} />
       <Route path="/ai" component={AiTutor} />
       <Route path="/progress" component={Progress} />
+      <Route path="/paper-checker" component={PaperChecker} />
       <Route path="/admin" component={Admin} />
       <Route path="/admin/testing" component={PaperTesting} />
       <Route path="/admin/ai-testing" component={AiAssistantTesting} />

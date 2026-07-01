@@ -44,6 +44,7 @@ test("result wording never displays more questions than remain after deduplicati
 });
 
 test("detects strict Physics refraction and Maths graph scopes", () => {
+  assert.deepEqual(detectRequestedTopic("Find Light questions from 2020-2024", "5054")?.topic, "Light");
   assert.deepEqual(detectRequestedTopic("Show refraction and total internal reflection questions", "5054")?.topic, "Light");
   assert.deepEqual(detectRequestedTopic("Give me graph questions from 2023", "4024")?.topic, "Graphs and Functions");
   assert.deepEqual(detectRequestedTopic("Give me ciruces questions", "4024")?.subtopics, ["Circle Theorems"]);

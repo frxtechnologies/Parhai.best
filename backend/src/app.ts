@@ -9,6 +9,9 @@ const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:5173,https:
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
+for (const localOrigin of ["http://127.0.0.1:5173", "http://localhost:5173"]) {
+  if (!allowedOrigins.includes(localOrigin)) allowedOrigins.push(localOrigin);
+}
 
 app.use(
   pinoHttp({

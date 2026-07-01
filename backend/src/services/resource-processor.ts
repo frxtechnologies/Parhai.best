@@ -29,6 +29,14 @@ export type IndexedQuestion = {
   marks: number | null;
 };
 
+export type MarkingSchemeAnswer = IndexedQuestion & {
+  baseNumber: string;
+  questionPart: string | null;
+  cleanText: string;
+  markingPoints: string[];
+  confidence: number;
+};
+
 export function normalizeResourceText(value: string) {
   return value.replace(/\r/g, "").replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -91,7 +99,10 @@ export function splitNumberedQuestions(text: string): IndexedQuestion[] {
   let baseNumber: string | null = null;
 
   const flush = () => {
-    if (current && current.lines.join(" ").trim().length >= 8) rows.push(current);
+    // Cambridge mark schemes often contain very short valid answers such as
+    // "1.52 1" or "–4 1". Requiring eight characters silently discarded
+    // those keys and left otherwise indexed questions unlinked.
+    if (current && current.lines.join(" ").trim().length >= 2) rows.push(current);
   };
 
   for (const line of lines) {
@@ -123,6 +134,48 @@ export function splitNumberedQuestions(text: string): IndexedQuestion[] {
   return [...unique.values()];
 }
 
+export function cleanMarkingSchemeText(text: string) {
+  return normalizeResourceText(text)
+    .replace(/\b(?:UCLES|Cambridge University Press & Assessment|Generic Marking Principles)\b/gi, " ")
+    .replace(/\b(?:Page\s+\d+\s+of\s+\d+|MARK SCHEME|PUBLISHED)\b/gi, " ")
+    .replace(/\bCambridge O Level\b/gi, " ")
+    .replace(/\b(?:May\/June|Oct\/Nov|Feb\/March)\s+20\d{2}\b/gi, " ")
+    .replace(/\bQuestion\s+Answer\s+Marks(?:\s+Partial\s+Marks)?\b/gi, " ")
+    .replace(/\b\d{4}\/\d{2}\b/g, " ")
+    .replace(/\b\d{4}\/(?:[0-9]{1,2}|[A-Z]{1,2})\/(?:M\/J|O\/N|F\/M)\/\d{2}\b/gi, " ")
+    .replace(/\*+\s*\d+\s*\*+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+export function extractMarkingSchemeAnswers(text: string): MarkingSchemeAnswer[] {
+  const tableStart = text.search(/\bQuestion\s+Answer\s+Marks(?:\s+Partial\s+Marks)?\b/i);
+  const tableText = tableStart >= 0 ? text.slice(tableStart) : text;
+  const mcqAnswers = new Map<string, MarkingSchemeAnswer>();
+  for (const line of normalizeResourceText(tableText).split("\n")) {
+    const pairs = [...line.matchAll(/(?:^|\s)(\d{1,2})\s+([A-D])(?=\s|$)/gi)];
+    for (const pair of pairs) {
+      const number=String(Number(pair[1])),key=pair[2]!.toUpperCase();
+      mcqAnswers.set(number,{number,text:key,marks:1,baseNumber:number,questionPart:null,cleanText:key,markingPoints:[key],confidence:0.99});
+    }
+  }
+  if(mcqAnswers.size>=10) return [...mcqAnswers.values()].sort((a,b)=>Number(a.baseNumber)-Number(b.baseNumber));
+  return splitNumberedQuestions(tableText).map((answer) => {
+    const baseNumber = answer.number.match(/^\d+/)?.[0] ?? answer.number;
+    const questionPart = answer.number.slice(baseNumber.length) || null;
+    const cleanText = cleanMarkingSchemeText(answer.text);
+    const markingPoints = cleanText.split(/\s*(?:;|\n|•)\s*/).map((point) => point.trim()).filter((point) => point.length > 1);
+    return {
+      ...answer,
+      baseNumber,
+      questionPart,
+      cleanText,
+      markingPoints,
+      confidence: questionPart ? 0.98 : 0.82,
+    };
+  }).filter((answer) => answer.cleanText.length > 1);
+}
+
 async function extractFileText(resource: ProcessableResource, buffer: Buffer) {
   const lowerName = resource.original_filename.toLowerCase();
   const isPdf = resource.file_type === "application/pdf" || lowerName.endsWith(".pdf");
@@ -147,23 +200,36 @@ async function resolveQuestionPaper(client: SupabaseClient, resource: Processabl
   return data?.id ? Number(data.id) : null;
 }
 
-async function linkAnswerRows(client: SupabaseClient, paperResourceId: number, answers: IndexedQuestion[]) {
+async function linkAnswerRows(client: SupabaseClient, paperResourceId: number, schemeResourceId: number, answers: MarkingSchemeAnswer[]) {
   let linked = 0;
-  for (const answer of answers) {
+  await client.from("marking_scheme_answers").delete().eq("resource_id", schemeResourceId);
+  const { data: savedAnswers, error: saveError } = await client.from("marking_scheme_answers").insert(answers.map((answer) => ({
+    resource_id: schemeResourceId, question_number: answer.baseNumber, question_part: answer.questionPart,
+    raw_answer_text: answer.text, clean_answer_text: answer.cleanText, marking_points: answer.markingPoints,
+    marks: answer.marks, confidence: answer.confidence,
+  }))).select("id,question_number,question_part,clean_answer_text,confidence");
+  if (saveError) throw saveError;
+  for (const answer of savedAnswers ?? []) {
+    const canonicalNumber = `${answer.question_number}${answer.question_part ?? ""}`;
     const { data, error } = await client.from("question_index").update({
-      answer_text: answer.text, marking_scheme_link_status: "linked", updated_at: new Date().toISOString(),
+      answer_text: answer.clean_answer_text, marking_scheme_answer_id: answer.id,
+      // The equality filter below targets the exact canonical question.
+      // Whole-number MCQs are exact links even without a subpart.
+      marking_scheme_link_status: "linked",
+      marking_scheme_link_confidence: answer.confidence, updated_at: new Date().toISOString(),
     })
-      .eq("resource_id", paperResourceId).eq("question_number", answer.number).select("id");
+      .eq("resource_id", paperResourceId).eq("question_number", canonicalNumber).select("id");
     if (error) throw error;
-    if (data?.length) {
-      linked += data.length;
-      continue;
-    }
-    const baseNumber = answer.number.match(/^\d+/)?.[0];
-    if (!baseNumber) continue;
+    linked += data?.length ?? 0;
+    // A scheme can contain a question-level answer while question_index also
+    // contains separate parts. Link any still-empty parts as partial even when
+    // an exact base row was found.
+    const baseNumber = answer.question_number;
     const { data: partial, error: partialError } = await client.from("question_index").update({
-      answer_text: answer.text, marking_scheme_link_status: "partial", updated_at: new Date().toISOString(),
-    }).eq("resource_id", paperResourceId).like("question_number", `${baseNumber}(%`).is("answer_text", null).select("id");
+      answer_text: answer.clean_answer_text, marking_scheme_answer_id: answer.id,
+      marking_scheme_link_status: "partial", marking_scheme_link_confidence: Math.min(Number(answer.confidence), 0.75),
+      updated_at: new Date().toISOString(),
+    }).eq("resource_id", paperResourceId).like("question_number", `${baseNumber}(%`).is("marking_scheme_answer_id", null).select("id");
     if (partialError) throw partialError;
     linked += partial?.length ?? 0;
   }
@@ -282,17 +348,17 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     }
     indexedQuestions = numbered.length;
     if (resource.resource_type === "PAST_PAPER") {
-      const { data: schemes, error: schemeError } = await client.from("resources").select("extracted_text")
+      const { data: schemes, error: schemeError } = await client.from("resources").select("id,extracted_text")
         .eq("resource_type", "MARKING_SCHEME").eq("related_resource_id", resource.id).not("extracted_text", "is", null);
       if (schemeError) throw schemeError;
-      for (const scheme of schemes ?? []) linkedAnswers += await linkAnswerRows(client, resource.id, splitNumberedQuestions(scheme.extracted_text));
+      for (const scheme of schemes ?? []) linkedAnswers += await linkAnswerRows(client, resource.id, Number(scheme.id), extractMarkingSchemeAnswers(scheme.extracted_text));
     }
   }
 
   if (resource.resource_type === "MARKING_SCHEME" && numbered.length) {
     const paperResourceId = await resolveQuestionPaper(client, resource);
     if (!paperResourceId) classificationWarning = "Marking scheme processed but not linked yet. Upload a past paper with the same subject, level, year, session, paper code, and variant.";
-    else linkedAnswers += await linkAnswerRows(client, paperResourceId, numbered);
+    else linkedAnswers += await linkAnswerRows(client, paperResourceId, resource.id, extractMarkingSchemeAnswers(extractedText));
   }
 
   return { extractedText, chunks: chunks.length, embeddings: embeddings.length, indexedQuestions, linkedAnswers, classificationWarning };

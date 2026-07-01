@@ -5,7 +5,11 @@ import WebSocket from "ws";
 const realtimeTransport = WebSocket as unknown as WebSocketLikeConstructor;
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const serverKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+const configuredServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+const serviceRoleKey = configuredServiceRoleKey && configuredServiceRoleKey !== "PASTE_SERVICE_ROLE_KEY_HERE"
+  ? configuredServiceRoleKey
+  : undefined;
+const serverKey = serviceRoleKey
   ?? process.env.SUPABASE_PUBLISHABLE_KEY
   ?? process.env.SUPABASE_ANON_KEY;
 
@@ -20,6 +24,8 @@ export const supabaseAdmin = createClient(supabaseUrl, serverKey, {
     persistSession: false,
   },
 });
+
+export const isServiceRoleConfigured = Boolean(serviceRoleKey);
 
 export function createUserClient(accessToken: string) {
   return createClient(supabaseUrl!, serverKey!, {
