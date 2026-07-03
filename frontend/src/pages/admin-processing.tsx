@@ -13,6 +13,8 @@ type Job = {
   error_message: string | null;
   retry_count: number;
   updated_at: string;
+  progress_percent: number;
+  current_step: string | null;
 };
 type Resource = {
   id: number;
@@ -62,12 +64,13 @@ export default function AdminProcessing() {
   );
   const [busy, setBusy] = useState<number | null>(null);
   const [message, setMessage] = useState("");
+  const [aiHealth,setAiHealth]=useState<any>(null);
 
   async function load() {
     const { data, error } = await requireSupabase()
       .from("resources")
       .select(
-        "id,title,original_filename,bucket,storage_path,resource_type,processing_status,processing_error,extracted_text_length,detected_question_count,saved_question_count,topic_tagging_status,marking_scheme_link_status,subjects(name),processing_jobs(id,status,error_message,retry_count,updated_at),question_index(count)",
+        "id,title,original_filename,bucket,storage_path,resource_type,processing_status,processing_error,extracted_text_length,detected_question_count,saved_question_count,topic_tagging_status,marking_scheme_link_status,subjects(name),processing_jobs(id,status,error_message,retry_count,progress_percent,current_step,updated_at),question_index(count)",
       )
       .order("created_at", { ascending: false });
     if (error) throw error;
@@ -83,6 +86,11 @@ export default function AdminProcessing() {
   useEffect(() => {
     void load().catch((error) => setMessage(error.message));
   }, []);
+  useEffect(()=>{
+    if(!isAdminEmail(user?.email))return;
+    void authHeader().then(headers=>fetch(`${API_BASE_URL}/api/admin/ai-health`,{headers}))
+      .then(response=>response.ok?response.json():null).then(setAiHealth).catch(()=>undefined);
+  },[user?.email]);
   if (isLoading)
     return (
       <AppLayout>
@@ -119,6 +127,16 @@ export default function AdminProcessing() {
     );
     setBusy(null);
     await load();
+  }
+
+  async function selective(resourceId:number,mode:"topic-tags"|"question-types"|"marking-scheme-links"|"embeddings"){
+    setBusy(resourceId);setMessage("");
+    try{
+      const response=await fetch(`${API_BASE_URL}/api/resources/${resourceId}/reprocess/${mode}`,{method:"POST",headers:await authHeader()});
+      const body=await response.json();if(!response.ok)throw new Error(body.error??"Reprocessing failed.");
+      setMessage(`${mode.replace(/-/g," ")} completed for resource ${resourceId}.`);await load();
+    }catch(error){setMessage(error instanceof Error?error.message:"Reprocessing failed.")}
+    finally{setBusy(null)}
   }
 
   async function viewQuestions(resourceId: number) {
@@ -216,6 +234,15 @@ export default function AdminProcessing() {
             {message}
           </div>
         )}
+        {aiHealth&&<section className="rounded-2xl border bg-white p-5">
+          <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wider text-cyan-700">AI data health</p><h2 className="mt-1 text-2xl font-bold text-[#0B1F3A]">{aiHealth.coverage.healthPercent}% ready</h2></div><p className="text-xs text-slate-400">Last evaluated {new Date(aiHealth.coverage.generatedAt).toLocaleString()}</p></div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[
+            ["Indexed",aiHealth.coverage.totals.indexedQuestions],["Verified",aiHealth.coverage.totals.verifiedQuestions],
+            ["Valid MS links",aiHealth.links.validLinks],["Invalid links",aiHealth.links.invalidLinks],
+            ["Unknown types",aiHealth.coverage.totals.unknownQuestionTypes],
+          ].map(([label,value])=><div key={String(label)} className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><b className="text-xl text-[#0B1F3A]">{value}</b></div>)}</div>
+          <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="text-slate-500"><th>Subject</th><th>Questions</th><th>Verified</th><th>Linked</th><th>Unknown type</th><th>Missing preview</th></tr></thead><tbody>{aiHealth.coverage.subjects.map((row:any)=><tr key={row.syllabusCode} className="border-t"><td className="py-2 font-semibold">{row.subjectName} {row.syllabusCode}</td><td>{row.indexedQuestions}</td><td>{row.verifiedQuestions}</td><td>{row.linkedQuestions}</td><td>{row.unknownQuestionTypes}</td><td>{row.missingPreviews}</td></tr>)}</tbody></table></div>
+        </section>}
         <section className="divide-y overflow-hidden rounded-2xl border bg-white">
           {resources.map((resource) => {
             const job = resource.processing_jobs[0];
@@ -240,6 +267,7 @@ export default function AdminProcessing() {
                       {resource.question_index[0]?.count ?? 0} indexed questions
                       · retries {job?.retry_count ?? 0}
                     </p>
+                    {job&&job.status!=="completed"&&<div className="mt-2 max-w-md"><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-cyan-500" style={{width:`${job.progress_percent??0}%`}}/></div><p className="mt-1 text-xs text-slate-500">{job.current_step?.replace(/_/g," ")??job.status} · {job.progress_percent??0}%</p></div>}
                     {(job?.error_message || resource.processing_error) && (
                       <p className="mt-2 text-xs text-red-600">
                         {job?.error_message || resource.processing_error}
@@ -276,7 +304,11 @@ export default function AdminProcessing() {
                       </dl>
                     </details>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button disabled={busy===resource.id} onClick={()=>selective(resource.id,"topic-tags")} className="rounded-lg border px-3 py-2 text-xs font-semibold">Retag topics</button>
+                    <button disabled={busy===resource.id} onClick={()=>selective(resource.id,"question-types")} className="rounded-lg border px-3 py-2 text-xs font-semibold">Reclassify types</button>
+                    <button disabled={busy===resource.id} onClick={()=>selective(resource.id,"marking-scheme-links")} className="rounded-lg border px-3 py-2 text-xs font-semibold">Relink MS</button>
+                    <button disabled={busy===resource.id} onClick={()=>selective(resource.id,"embeddings")} className="rounded-lg border px-3 py-2 text-xs font-semibold">Rebuild embeddings</button>
                     <button disabled={busy === resource.id} onClick={() => generateScreenshots(resource.id)}
                       className="rounded-lg border border-teal-200 px-3 py-2 text-sm font-semibold text-teal-700 disabled:opacity-50">
                       Generate screenshots

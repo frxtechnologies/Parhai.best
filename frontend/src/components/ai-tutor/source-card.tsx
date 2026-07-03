@@ -167,13 +167,23 @@ export function SourceCard({
   const shortTitle = `${subjectLabel} · ${source.year ?? "Year"} ${sessionLabel} · Paper ${source.paperNumber ?? "—"} Variant ${source.variant ?? "—"} · Q${source.questionNumber ?? "—"}`;
 
   const schemeLabel =
-    ["partial", "linked_partial"].includes(source.markingSchemeLinkStatus ?? "")
+    source.markingSchemeStatus==="invalid_link"
+      ? "Answer needs review"
+      : source.markingSchemeStatus==="resource_missing"
+      ? "Marking scheme not uploaded"
+      : ["resource_exists_answer_missing","answer_not_extracted","answer_extracted_not_linked"].includes(source.markingSchemeStatus??"")
+      ? "Marking scheme uploaded, answer not extracted"
+      : source.markingSchemeLinkStatus==="general_guidance"||source.markingSchemeStatus==="generic_guidance_only"
+      ? "General guidance only"
+      : source.markingSchemeLinkStatus==="needs_review"
+      ? "Needs marking scheme review"
+      : ["partial", "linked_partial"].includes(source.markingSchemeLinkStatus ?? "")
       ? "Partial marking scheme match"
       : source.answerText ||
           ["linked", "linked_exact"].includes(source.markingSchemeLinkStatus ?? "")
         ? "Marking scheme available"
         : source.markingSchemeResourceId
-          ? "Marking scheme preview pending"
+          ? "Question-specific marking scheme not linked"
           : "Marking scheme not linked yet";
   return (
     <article className="animate-in fade-in slide-in-from-bottom-1 rounded-[22px] border border-slate-200/80 bg-white p-4 transition hover:border-emerald-200 hover:shadow-[0_12px_32px_rgba(15,23,42,.07)]">
@@ -252,6 +262,11 @@ export function SourceCard({
         {source.difficulty && (
           <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
             {source.difficulty}
+          </span>
+        )}
+        {source.questionType && (
+          <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-semibold text-cyan-700">
+            {source.questionType.replace("_", " ")}
           </span>
         )}
         {source.marks != null && (

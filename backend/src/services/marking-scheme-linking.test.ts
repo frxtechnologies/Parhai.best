@@ -1,10 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cleanMarkingSchemeText, extractMarkingSchemeAnswers } from "./resource-processor";
+import { chunkTypeForResource, cleanMarkingSchemeText, extractMarkingSchemeAnswers } from "./resource-processor";
 
 test("extracts Cambridge question parts without treating 12 as variant 12", () => {
   const rows = extractMarkingSchemeAnswers("1 (a) refraction towards normal [1]\n(b) total internal reflection [2]\n2 answer 4.5 J [2]");
   assert.deepEqual(rows.map((row) => [row.baseNumber, row.questionPart]), [["1", "(a)"], ["1", "(b)"], ["2", null]]);
+});
+
+test("assigns typed searchable chunks by resource behavior",()=>{
+  assert.equal(chunkTypeForResource("MARKING_SCHEME"),"marking_scheme_answer");
+  assert.equal(chunkTypeForResource("NOTES"),"note_section");
+  assert.equal(chunkTypeForResource("SYLLABUS"),"syllabus_section");
+  assert.equal(chunkTypeForResource("EXAMINER_REPORT"),"examiner_insight");
+  assert.equal(chunkTypeForResource("GRADE_THRESHOLD"),"grade_threshold");
 });
 
 test("extracts both columns from Cambridge multiple-choice keys",()=>{

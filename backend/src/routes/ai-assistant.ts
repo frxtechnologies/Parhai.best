@@ -26,12 +26,17 @@ import {
 import { screenshotMode } from "../services/question-screenshots";
 import { getTopicContext } from "../services/cambridge-context";
 import { createExamEngine, detectExamIntent, detectSubjectCode, type ExamFilters } from "../services/exam-engine";
+import {isOfficialQuestionAnswer} from "../services/marking-scheme-intelligence";
+import {parseStudentPromptToQuery,validateSourceAgainstParsedQuery} from "../services/source-grounded-query";
 
 const router: IRouter = Router();
 const MISSING_SOURCE_MESSAGE =
   "I could not find this in the uploaded papers yet.";
 const UNPROCESSED_PAPER_MESSAGE =
   "This paper is uploaded but not processed yet. Please process it first.";
+const schemeAnswer=(row:any)=>Array.isArray(row.marking_scheme_answers)?row.marking_scheme_answers[0]:row.marking_scheme_answers;
+const officialAnswerText=(row:any)=>isOfficialQuestionAnswer(schemeAnswer(row),row.marking_scheme_link_status,row)?row.answer_text:null;
+const safeSchemeStatus=(row:any)=>isOfficialQuestionAnswer(schemeAnswer(row),row.marking_scheme_link_status,row)?row.marking_scheme_link_status:schemeAnswer(row)?.answer_type==="generic_guidance"?"general_guidance":schemeAnswer(row)?"needs_review":"unlinked";
 
 const PaperAction = z.object({
   subjectCode: z.string().regex(/^\d{4}$/),
@@ -670,13 +675,16 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     const token = req.header("authorization")?.replace(/^Bearer\s+/i, "");
     const client = createUserClient(token!);
     const input = parsed.data;
+    const parsedQuery=parseStudentPromptToQuery(input.message);
+    const userEmail=String(res.locals.user?.email??"").trim().toLowerCase();
+    const adminCheck=input.debug&&userEmail?await client.from("admin_users").select("email").eq("email",userEmail).maybeSingle():{data:null};
+    const showDiagnostics=Boolean(input.debug&&adminCheck.data);
     const actionSubjectCode = input.action && "subjectCode" in input.action ? input.action.subjectCode : null;
-    const explicitSubjectCode = actionSubjectCode ?? detectSubjectCode(input.message);
+    const explicitSubjectCode = actionSubjectCode ?? parsedQuery.syllabusCode ?? detectSubjectCode(input.message);
     let subjectQuery = client
       .from("subjects")
-      .select("id,name,code,level,board")
-      .eq("level", input.level);
-    subjectQuery = explicitSubjectCode ? subjectQuery.eq("code", explicitSubjectCode) : subjectQuery.eq("id", input.subjectId);
+      .select("id,name,code,level,board");
+    subjectQuery = explicitSubjectCode ? subjectQuery.eq("code", explicitSubjectCode) : subjectQuery.eq("level", input.level).eq("id", input.subjectId);
     const { data: subject, error: subjectError } = await subjectQuery.single();
     if (subjectError || !subject) {
       res.status(404).json({ error: "Subject not found." });
@@ -708,6 +716,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
       year:parsedFilters.year??input.year??undefined,yearFrom:parsedFilters.yearFrom??undefined,yearTo:parsedFilters.yearTo??undefined,
       session:parsedFilters.session??input.session??undefined,paperNumber:parsedFilters.paperNumber??input.paperNumber??undefined,
       variant:parsedFilters.variant??input.variant??undefined,difficulty:parsedFilters.difficulty as ExamFilters["difficulty"],limit:input.limit,offset:input.offset,
+      questionType:parsedQuery.questionType??undefined,markingSchemeOnly:parsedQuery.markingSchemeRequired,
     };
     const isMathsPaperDebug=process.env.NODE_ENV!=="production"&&input.message.trim().toLowerCase()==="give me 2023 maths paper 1";
     if(isMathsPaperDebug) console.info("[AI Tutor route debug]",{rawQuery:input.message,detectedIntent:examIntent,detectedSubject:subject.name,detectedSubjectCode:subject.code,year:engineFilters.year,session:engineFilters.session,paperNumber:engineFilters.paperNumber,finalFilters:engineFilters});
@@ -722,21 +731,21 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     if(input.action?.type==="show_questions_from_paper"){
       const a=input.action;
       const result=await deterministic.findQuestions({subjectCode:a.subjectCode,year:a.year,session:a.session,paperNumber:a.paperNumber,variant:a.variant,limit:10});
-      const sources=result.rows.map((row:any,index:number)=>({chunkId:row.id,sourceType:"question",paperId:null,resourceId:row.resource_id,markingSchemeResourceId:schemeResourceId(row),year:row.year,session:row.session,paperNumber:Number(row.paper_code),variant:row.variant,questionNumber:row.question_number,questionText:row.display_question_text??row.clean_question_text,answerText:row.answer_text,markingSchemeLinkStatus:row.marking_scheme_link_status,screenshotUrl:row.question_screenshot_url,screenshotStatus:row.screenshot_status,sourcePage:row.source_page,bbox:row.bbox,topic:row.topic,subtopic:row.subtopic,difficulty:row.difficulty,marks:row.total_marks??row.marks,reference:`[S${index+1}] ${subject.name} ${subject.code} · ${row.year} · ${row.session} · Paper ${row.paper_code} · Variant ${row.variant} · Question ${row.question_number}`}));
+      const sources=result.rows.map((row:any,index:number)=>({chunkId:row.id,sourceType:"question",paperId:null,resourceId:row.resource_id,markingSchemeResourceId:schemeResourceId(row),year:row.year,session:row.session,paperNumber:Number(row.paper_code),variant:row.variant,questionNumber:row.question_number,questionText:row.display_question_text??row.clean_question_text,answerText:officialAnswerText(row),markingSchemeLinkStatus:safeSchemeStatus(row),screenshotUrl:row.question_screenshot_url,screenshotStatus:row.screenshot_status,sourcePage:row.source_page,bbox:row.bbox,topic:row.topic,subtopic:row.subtopic,difficulty:row.difficulty,marks:row.total_marks??row.marks,reference:`[S${index+1}] ${subject.name} ${subject.code} · ${row.year} · ${row.session} · Paper ${row.paper_code} · Variant ${row.variant} · Question ${row.question_number}`}));
       res.json({answer:`I found ${result.total} verified questions for this exact paper. Showing ${sources.length}.`,sources,intent:"question_search",pagination:{total:result.total,limit:result.limit,offset:0,hasMore:result.hasMore},searchContext:{subjectCode:a.subjectCode,topic:null,year:a.year,yearFrom:null,yearTo:null,session:a.session,paperNumber:a.paperNumber,variant:a.variant,difficulty:null,markingSchemeOnly:false}});
       return;
     }
     if(input.action?.type==="explain_question"||input.action?.type==="show_marking_scheme"){
       const question=await deterministic.getQuestionWithSources(input.action.questionId);
       const scheme=input.action.type==="show_marking_scheme"?await deterministic.getLinkedMarkingScheme(input.action.questionId):null;
-      const source={chunkId:question.id,sourceType:"question",paperId:null,resourceId:question.resource_id,markingSchemeResourceId:schemeResourceId(question),year:question.year,session:question.session,paperNumber:Number(question.paper_code),variant:question.variant,questionNumber:question.question_number,questionText:question.display_question_text??question.clean_question_text,answerText:question.answer_text,markingSchemeLinkStatus:question.marking_scheme_link_status,screenshotUrl:question.question_screenshot_url,screenshotStatus:question.screenshot_status,sourcePage:question.source_page,bbox:question.bbox,topic:question.topic,subtopic:question.subtopic,difficulty:question.difficulty,marks:question.total_marks??question.marks,reference:`[S1] ${subject.name} ${subject.code} · ${question.year} · ${question.session} · Paper ${question.paper_code} · Variant ${question.variant} · Question ${question.question_number}`};
-      res.json({answer:input.action.type==="show_marking_scheme"?(scheme?`Official marking-scheme data:\n\n${scheme.answer_text??"Linked marking scheme available."}`:"Marking scheme not linked yet."):`${question.display_question_text??question.clean_question_text}\n\nAI explanation is unavailable, but verified source data is available.`,sources:[source],intent:input.action.type==="show_marking_scheme"?"marking_scheme_lookup":"question_explanation"});
+      const source={chunkId:question.id,sourceType:"question",paperId:null,resourceId:question.resource_id,markingSchemeResourceId:schemeResourceId(question),year:question.year,session:question.session,paperNumber:Number(question.paper_code),variant:question.variant,questionNumber:question.question_number,questionText:question.display_question_text??question.clean_question_text,answerText:officialAnswerText(question),markingSchemeLinkStatus:safeSchemeStatus(question),screenshotUrl:question.question_screenshot_url,screenshotStatus:question.screenshot_status,sourcePage:question.source_page,bbox:question.bbox,topic:question.topic,subtopic:question.subtopic,difficulty:question.difficulty,marks:question.total_marks??question.marks,reference:`[S1] ${subject.name} ${subject.code} · ${question.year} · ${question.session} · Paper ${question.paper_code} · Variant ${question.variant} · Question ${question.question_number}`};
+      res.json({answer:input.action.type==="show_marking_scheme"?(scheme?`Official question-specific marking-scheme data:\n\n${scheme.answer_text}`:"The official question-specific marking scheme is not linked for this question yet."):`${question.display_question_text??question.clean_question_text}\n\nAI explanation is unavailable, but verified source data is available.`,sources:[source],intent:input.action.type==="show_marking_scheme"?"marking_scheme_lookup":"question_explanation"});
       return;
     }
     if(input.action?.type==="load_more"){
       const q=input.action.queryState;
       const result=await deterministic.findQuestions({...q,topic:q.topic??undefined,year:q.year??undefined,yearFrom:q.yearFrom??undefined,yearTo:q.yearTo??undefined,session:q.session??undefined,paperNumber:q.paperNumber??undefined,variant:q.variant??undefined,difficulty:q.difficulty??undefined,limit:input.action.limit,offset:input.action.offset});
-      const sources=result.rows.map((row:any,index:number)=>({chunkId:row.id,sourceType:"question",paperId:null,resourceId:row.resource_id,markingSchemeResourceId:schemeResourceId(row),year:row.year,session:row.session,paperNumber:Number(row.paper_code),variant:row.variant,questionNumber:row.question_number,questionText:row.display_question_text??row.clean_question_text,answerText:row.answer_text,markingSchemeLinkStatus:row.marking_scheme_link_status,screenshotUrl:row.question_screenshot_url,screenshotStatus:row.screenshot_status,sourcePage:row.source_page,bbox:row.bbox,topic:row.topic,subtopic:row.subtopic,difficulty:row.difficulty,marks:row.total_marks??row.marks,reference:`[S${index+1}] ${subject.name} ${subject.code} · ${row.year} · ${row.session} · Paper ${row.paper_code} · Variant ${row.variant} · Question ${row.question_number}`}));
+      const sources=result.rows.map((row:any,index:number)=>({chunkId:row.id,sourceType:"question",paperId:null,resourceId:row.resource_id,markingSchemeResourceId:schemeResourceId(row),year:row.year,session:row.session,paperNumber:Number(row.paper_code),variant:row.variant,questionNumber:row.question_number,questionText:row.display_question_text??row.clean_question_text,answerText:officialAnswerText(row),markingSchemeLinkStatus:safeSchemeStatus(row),screenshotUrl:row.question_screenshot_url,screenshotStatus:row.screenshot_status,sourcePage:row.source_page,bbox:row.bbox,topic:row.topic,subtopic:row.subtopic,difficulty:row.difficulty,marks:row.total_marks??row.marks,reference:`[S${index+1}] ${subject.name} ${subject.code} · ${row.year} · ${row.session} · Paper ${row.paper_code} · Variant ${row.variant} · Question ${row.question_number}`}));
       res.json({answer:`Showing ${sources.length} more verified questions.`,sources,intent:"question_search",pagination:{total:result.total,limit:result.limit,offset:result.offset,hasMore:result.hasMore},searchContext:q});
       return;
     }
@@ -750,13 +759,22 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
     }
     if(examIntent==="question_search"){
       const requested=detectRequestedTopic(input.message,subject.code);
-      const result=await deterministic.findQuestions({...engineFilters,topic:requested?.topic});
-      const sources=result.rows.map((row,index)=>{
-        const resource=Array.isArray(row.resources)?row.resources[0]:row.resources;
-        return {chunkId:row.id,sourceType:"question" as const,paperId:null,resourceId:row.resource_id,markingSchemeResourceId:schemeResourceId(row),year:row.year,session:row.session,paperNumber:row.paper_code,variant:row.variant,questionNumber:row.question_number,questionText:row.display_question_text??row.clean_question_text,answerText:row.answer_text,markingSchemeLinkStatus:row.marking_scheme_link_status,screenshotUrl:row.question_screenshot_url,screenshotStatus:row.screenshot_status,sourcePage:row.source_page,bbox:row.bbox,filePath:resource?.storage_path,topic:row.topic,subtopic:row.subtopic,difficulty:row.difficulty,marks:row.total_marks??row.marks,reference:`[S${index+1}] ${subject.name} ${subject.code} · ${row.year} · ${String(row.session??"").replace("_"," ")} · Paper ${row.paper_code} · Variant ${row.variant} · Question ${row.question_number}`};
+      const result=await deterministic.findQuestions({...engineFilters,topic:parsedQuery.topic??requested?.topic,limit:50,offset:0});
+      const validation=result.rows.map((row:any)=>{
+        const nestedSubject=Array.isArray(row.subjects)?row.subjects[0]:row.subjects;
+        return{row,validation:validateSourceAgainstParsedQuery({...row,subject_code:nestedSubject?.code,level:nestedSubject?.level},parsedQuery)};
       });
-      const topic=requested?.topic??"matching";
-      res.json({answer:`I found ${result.total} verified questions on ${topic}. Showing ${sources.length}.${result.hasMore?" Load more to see the next results.":""}`,sources,intent:examIntent,pagination:{total:result.total,limit:result.limit,offset:result.offset,hasMore:result.hasMore},searchContext:{subjectCode:subject.code,topic:requested?.topic??null,year:engineFilters.year??null,yearFrom:engineFilters.yearFrom??null,yearTo:engineFilters.yearTo??null,session:engineFilters.session??null,paperNumber:engineFilters.paperNumber??null,variant:engineFilters.variant??null,difficulty:engineFilters.difficulty??null,markingSchemeOnly:false}});
+      const validRows=validation.filter(item=>item.validation.valid).map(item=>item.row);
+      const rejected=validation.filter(item=>!item.validation.valid);
+      const displayedRows=validRows.slice(input.offset,input.offset+input.limit);
+      const sources=displayedRows.map((row,index)=>{
+        const resource=Array.isArray(row.resources)?row.resources[0]:row.resources;
+        return {chunkId:row.id,sourceType:"question" as const,paperId:null,resourceId:row.resource_id,markingSchemeResourceId:schemeResourceId(row),year:row.year,session:row.session,paperNumber:row.paper_code,variant:row.variant,questionNumber:row.question_number,questionText:row.display_question_text??row.clean_question_text,answerText:officialAnswerText(row),markingSchemeLinkStatus:safeSchemeStatus(row),screenshotUrl:row.question_screenshot_url,screenshotStatus:row.screenshot_status,sourcePage:row.source_page,bbox:row.bbox,filePath:resource?.storage_path,topic:row.topic,subtopic:row.subtopic,difficulty:row.difficulty,marks:row.total_marks??row.marks,reference:`[S${index+1}] ${subject.name} ${subject.code} · ${row.year} · ${String(row.session??"").replace("_"," ")} · Paper ${row.paper_code} · Variant ${row.variant} · Question ${row.question_number}`};
+      });
+      const exactCount=validRows.length,topic=parsedQuery.topic??requested?.topic??"matching";
+      const filterSummary=[parsedQuery.level?.replace("_"," "),`${subject.name} ${subject.code}`,engineFilters.paperNumber?`Paper ${engineFilters.paperNumber}`:null,parsedQuery.questionType?`${parsedQuery.questionType}-based questions`:null,parsedQuery.yearStart&&parsedQuery.yearEnd?`${parsedQuery.yearStart}–${parsedQuery.yearEnd}`:null].filter(Boolean).join(" · ");
+      const answer=exactCount?`I found ${exactCount} exact verified questions on ${topic}. Showing ${sources.length}.${exactCount>sources.length?" Load more to see the next results.":""}`:`I could not find exact indexed matches for: ${filterSummary}. Some papers may not be fully indexed or their question type may still need verification.`;
+      res.json({answer,sources,intent:examIntent,pagination:{total:exactCount,limit:input.limit,offset:input.offset,hasMore:input.offset+input.limit<exactCount},searchContext:{subjectCode:subject.code,topic:parsedQuery.topic??requested?.topic??null,year:engineFilters.year??null,yearFrom:engineFilters.yearFrom??null,yearTo:engineFilters.yearTo??null,session:engineFilters.session??null,paperNumber:engineFilters.paperNumber??null,variant:engineFilters.variant??null,difficulty:engineFilters.difficulty??null,markingSchemeOnly:parsedQuery.markingSchemeRequired,questionType:parsedQuery.questionType},...(showDiagnostics?{diagnostics:{originalPrompt:input.message,parsedQuery,hardFilters:engineFilters,candidatesBeforeValidation:result.rows.length,afterValidation:exactCount,rejectedSourceCount:rejected.length,rejections:rejected.map(item=>({id:item.row.id,reasons:item.validation.reasons})),finalSourceIds:sources.map(source=>source.chunkId)}}:{})});
       return;
     }
     if(examIntent==="topic_count"){
@@ -795,7 +813,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
       res.json({
         answer: `I’m your ${teacherName}, so I can only help with ${subject.name} in this workspace. Please open the correct subject page for that question.`,
         sources: [],
-        ...(input.debug
+        ...(showDiagnostics
           ? {
               diagnostics: {
                 mode,
@@ -860,7 +878,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
           ? "This resource is uploaded but not processed yet. Please process it first."
           : UNPROCESSED_PAPER_MESSAGE,
         sources: [],
-        ...(input.debug ? { retrievedResults: [], diagnostics } : {}),
+        ...(showDiagnostics ? { retrievedResults: [], diagnostics } : {}),
       });
       return;
     }
@@ -889,7 +907,7 @@ router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
       res.json({
         answer: statusMessages.join(" ") || MISSING_SOURCE_MESSAGE,
         sources: [],
-        ...(input.debug ? { retrievedResults: [], diagnostics } : {}),
+        ...(showDiagnostics ? { retrievedResults: [], diagnostics } : {}),
       });
       return;
     }
@@ -1006,7 +1024,7 @@ Do not create a separate Sources section; Parhai renders verified sources below 
         answer: [resultSummary, fallbackAnswer].filter(Boolean).join("\n\n"),
         sources: fallbackSources,
         providerUnavailable: true,
-        ...(input.debug
+        ...(showDiagnostics
           ? {
               providerError:
                 providerError instanceof Error
@@ -1117,7 +1135,7 @@ Do not create a separate Sources section; Parhai renders verified sources below 
     res.json({
       answer: [resultSummary, presentedAnswer].filter(Boolean).join("\n\n"),
       sources,
-      ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}),
+      ...(showDiagnostics ? { retrievedResults: retrieved, diagnostics } : {}),
     });
   } catch (error) {
     req.log.error({ error }, "AI assistant request failed");

@@ -1,0 +1,7 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {classifyMarkingSchemeSection,isOfficialQuestionAnswer,markingSchemeMetadataMatches} from "./marking-scheme-intelligence";
+test("generic calculation guidance is never question-specific",()=>{const r=classifyMarkingSchemeSection("Calculation specific guidance Correct answers to calculations should be given full credit.");assert.equal(r.answerType,"generic_guidance");assert.equal(r.isQuestionSpecific,false)});
+test("specific numbered parts are classified as linkable answers",()=>{const r=classifyMarkingSchemeSection("6 (a) 12.4 N [2]",{questionNumber:"6",questionPart:"(a)",marks:2});assert.equal(r.answerType,"question_answer");assert.equal(r.isQuestionSpecific,true)});
+test("official predicate rejects generic and low-confidence rows",()=>{assert.equal(isOfficialQuestionAnswer({answer_type:"generic_guidance",is_question_specific:false,confidence:1},"linked"),false);assert.equal(isOfficialQuestionAnswer({answer_type:"question_answer",is_question_specific:true,confidence:.95,link_confidence:.9},"linked_exact"),true)});
+test("strict metadata matching rejects a different variant",()=>{const q={subject_code:"5054",level:"O_LEVEL",year:2023,session:"MAY_JUNE",paper_code:2,variant:1,question_number:"6(a)",question_part:"(a)"};assert.equal(markingSchemeMetadataMatches(q,{...q,variant:2,question_number:"6",question_part:"(a)"}),false)});

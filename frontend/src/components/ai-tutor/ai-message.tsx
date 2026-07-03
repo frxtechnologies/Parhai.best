@@ -74,7 +74,7 @@ export function AIMessage({
     (source) =>
       !schemeOnly ||
       Boolean(source.answerText) ||
-      ["linked", "partial", "linked_exact", "linked_partial"].includes(source.markingSchemeLinkStatus ?? ""),
+      ["linked", "linked_exact"].includes(source.markingSchemeLinkStatus ?? ""),
   );
   const questions = sources.filter(
     (source) => source.sourceType === "question",

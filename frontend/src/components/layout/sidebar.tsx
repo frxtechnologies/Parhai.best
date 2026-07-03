@@ -18,6 +18,9 @@ import {
   RefreshCw,
   Tags,
   ClipboardCheck,
+  ScanSearch,
+  TrendingUp,
+  CalendarDays,
 } from "lucide-react";
 
 function cn(...classes: (string | boolean | undefined)[]) {
@@ -32,6 +35,9 @@ const NAV_ITEMS = [
   { label: "Questions", href: "/questions", icon: HelpCircle },
   { label: "AI Tutor", href: "/ai", icon: Bot },
   { label: "Paper Checker", href: "/paper-checker", icon: ClipboardCheck },
+  { label: "Paper Analyzer", href: "/paper-analyzer", icon: ScanSearch },
+  { label: "Repeated Topics", href: "/repeated-topics", icon: TrendingUp },
+  { label: "Revision Planner", href: "/revision-planner", icon: CalendarDays },
   { label: "Progress", href: "/progress", icon: LineChart },
 ];
 

@@ -83,7 +83,7 @@ export default function Onboarding() {
                         <BookOpen className={`h-12 w-12 mx-auto mb-4 ${level === lvl ? "text-[#0B1F3A]" : "text-gray-400"}`} />
                       )}
                       <h3 className="text-2xl font-bold text-[#0B1F3A]">{lvl === "O_LEVEL" ? "O Level" : "A Level"}</h3>
-                      <p className="text-gray-500 mt-2">{lvl === "O_LEVEL" ? "Cambridge O Level / IGCSE" : "Cambridge AS & A Level"}</p>
+                      <p className="text-gray-500 mt-2">{lvl === "O_LEVEL" ? "Cambridge International O Level" : "Cambridge International AS & A Level"}</p>
                     </button>
                   ))}
                 </div>

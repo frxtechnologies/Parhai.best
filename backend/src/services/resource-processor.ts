@@ -3,6 +3,8 @@ import pdf from "pdf-parse/lib/pdf-parse.js";
 import { generateDocumentEmbeddings, AI_EMBEDDING_MODEL } from "../lib/ai-service";
 import { createAndStoreQuestionScreenshots, screenshotMode } from "./question-screenshots";
 import { tagQuestionsForSubject } from "./topic-tagging";
+import { classifyQuestionTypeDetailed } from "./source-grounded-query";
+import { classifyMarkingSchemeSection, type MarkingAnswerType } from "./marking-scheme-intelligence";
 
 export type ProcessableResource = {
   id: number;
@@ -35,6 +37,9 @@ export type MarkingSchemeAnswer = IndexedQuestion & {
   cleanText: string;
   markingPoints: string[];
   confidence: number;
+  answerType:MarkingAnswerType;
+  isQuestionSpecific:boolean;
+  detectionReason:string;
 };
 
 export function normalizeResourceText(value: string) {
@@ -58,6 +63,15 @@ export function splitResourceChunks(text: string, maxLength = 1400, overlap = 18
     start = Math.max(end - overlap, start + 1);
   }
   return chunks;
+}
+
+export function chunkTypeForResource(resourceType:string) {
+  return resourceType==="MARKING_SCHEME"?"marking_scheme_answer"
+    :resourceType==="SYLLABUS"?"syllabus_section"
+    :resourceType==="EXAMINER_REPORT"?"examiner_insight"
+    :resourceType==="GRADE_THRESHOLD"?"grade_threshold"
+    :resourceType==="NOTE"||resourceType==="NOTES"?"note_section"
+    :"resource_text";
 }
 
 function readMarks(text: string) {
@@ -156,7 +170,7 @@ export function extractMarkingSchemeAnswers(text: string): MarkingSchemeAnswer[]
     const pairs = [...line.matchAll(/(?:^|\s)(\d{1,2})\s+([A-D])(?=\s|$)/gi)];
     for (const pair of pairs) {
       const number=String(Number(pair[1])),key=pair[2]!.toUpperCase();
-      mcqAnswers.set(number,{number,text:key,marks:1,baseNumber:number,questionPart:null,cleanText:key,markingPoints:[key],confidence:0.99});
+       mcqAnswers.set(number,{number,text:key,marks:1,baseNumber:number,questionPart:null,cleanText:key,markingPoints:[key],confidence:0.99,answerType:"question_answer",isQuestionSpecific:true,detectionReason:"Numbered multiple-choice answer key"});
     }
   }
   if(mcqAnswers.size>=10) return [...mcqAnswers.values()].sort((a,b)=>Number(a.baseNumber)-Number(b.baseNumber));
@@ -165,18 +179,20 @@ export function extractMarkingSchemeAnswers(text: string): MarkingSchemeAnswer[]
     const questionPart = answer.number.slice(baseNumber.length) || null;
     const cleanText = cleanMarkingSchemeText(answer.text);
     const markingPoints = cleanText.split(/\s*(?:;|\n|•)\s*/).map((point) => point.trim()).filter((point) => point.length > 1);
-    return {
+    const classified=classifyMarkingSchemeSection(`${answer.number} ${cleanText}`,{questionNumber:baseNumber,questionPart,marks:answer.marks});
+     return {
       ...answer,
       baseNumber,
       questionPart,
       cleanText,
       markingPoints,
-      confidence: questionPart ? 0.98 : 0.82,
+       confidence: classified.confidence,
+       answerType:classified.answerType,isQuestionSpecific:classified.isQuestionSpecific,detectionReason:classified.reason,
     };
   }).filter((answer) => answer.cleanText.length > 1);
 }
 
-async function extractFileText(resource: ProcessableResource, buffer: Buffer) {
+export async function extractFileText(resource: ProcessableResource, buffer: Buffer) {
   const lowerName = resource.original_filename.toLowerCase();
   const isPdf = resource.file_type === "application/pdf" || lowerName.endsWith(".pdf");
   const isText = resource.file_type?.startsWith("text/") || lowerName.endsWith(".txt");
@@ -200,22 +216,32 @@ async function resolveQuestionPaper(client: SupabaseClient, resource: Processabl
   return data?.id ? Number(data.id) : null;
 }
 
-async function linkAnswerRows(client: SupabaseClient, paperResourceId: number, schemeResourceId: number, answers: MarkingSchemeAnswer[]) {
+export async function linkAnswerRows(client: SupabaseClient, paperResourceId: number, schemeResourceId: number, answers: MarkingSchemeAnswer[]) {
   let linked = 0;
+  const{data:scheme,error:schemeError}=await client.from("resources").select("id,subject_id,level,year,session,paper_number,paper_code,variant,subjects(code)").eq("id",schemeResourceId).single();
+  if(schemeError||!scheme)throw schemeError??new Error("Marking scheme resource not found.");
+  const schemeSubject=Array.isArray(scheme.subjects)?scheme.subjects[0]:scheme.subjects;
+  const schemePaper=Number(scheme.paper_number??scheme.paper_code);
   await client.from("marking_scheme_answers").delete().eq("resource_id", schemeResourceId);
   const { data: savedAnswers, error: saveError } = await client.from("marking_scheme_answers").insert(answers.map((answer) => ({
     resource_id: schemeResourceId, question_number: answer.baseNumber, question_part: answer.questionPart,
-    raw_answer_text: answer.text, clean_answer_text: answer.cleanText, marking_points: answer.markingPoints,
-    marks: answer.marks, confidence: answer.confidence,
-  }))).select("id,question_number,question_part,clean_answer_text,confidence");
+     subject_id:scheme.subject_id,syllabus_code:schemeSubject?.code,level:scheme.level,year:scheme.year,session:scheme.session,
+     paper_number:schemePaper,variant:scheme.variant,component_variant_code:schemePaper&&scheme.variant?`${schemePaper}${scheme.variant}`:null,
+     raw_answer_text: answer.text, clean_answer_text: answer.cleanText, normalized_text:answer.cleanText, marking_points: answer.markingPoints,
+     raw_text:answer.text,answer_text:answer.cleanText,marking_points_json:answer.markingPoints,
+     marks: answer.marks, confidence: answer.confidence,extraction_confidence:answer.confidence,
+     answer_type:answer.answerType,is_question_specific:answer.isQuestionSpecific,detection_reason:answer.detectionReason,
+     link_confidence:answer.isQuestionSpecific?answer.confidence:0,linked_status:answer.isQuestionSpecific?"unlinked":"needs_review",
+   }))).select("id,question_number,question_part,clean_answer_text,confidence,answer_type,is_question_specific,extraction_confidence,link_confidence");
   if (saveError) throw saveError;
   for (const answer of savedAnswers ?? []) {
+    if(answer.answer_type!=="question_answer"||!answer.is_question_specific||Number(answer.extraction_confidence??answer.confidence)<.8)continue;
     const canonicalNumber = `${answer.question_number}${answer.question_part ?? ""}`;
     const { data, error } = await client.from("question_index").update({
       answer_text: answer.clean_answer_text, marking_scheme_answer_id: answer.id,
       // The equality filter below targets the exact canonical question.
       // Whole-number MCQs are exact links even without a subpart.
-      marking_scheme_link_status: "linked",
+       marking_scheme_link_status: "linked_exact",
       marking_scheme_link_confidence: answer.confidence, updated_at: new Date().toISOString(),
     })
       .eq("resource_id", paperResourceId).eq("question_number", canonicalNumber).select("id");
@@ -232,11 +258,13 @@ async function linkAnswerRows(client: SupabaseClient, paperResourceId: number, s
     }).eq("resource_id", paperResourceId).like("question_number", `${baseNumber}(%`).is("marking_scheme_answer_id", null).select("id");
     if (partialError) throw partialError;
     linked += partial?.length ?? 0;
+    await client.from("marking_scheme_answers").update({linked_status:(data?.length??0)>0?"linked":(partial?.length??0)>0?"partial":"unlinked",question_id:data?.[0]?.id??null,link_confidence:(data?.length??0)>0?Number(answer.confidence):Math.min(Number(answer.confidence),.75)}).eq("id",answer.id);
   }
   return linked;
 }
 
-export async function processResourceContent(client: SupabaseClient, resource: ProcessableResource, onExtracted?: () => Promise<void>) {
+export type PipelineStep="extracting_text"|"rendering_pages"|"detecting_metadata"|"splitting_questions"|"tagging_topics"|"linking_marking_scheme"|"creating_embeddings"|"updating_analytics";
+export async function processResourceContent(client: SupabaseClient, resource: ProcessableResource, onStep?: (step:PipelineStep,progress:number)=>Promise<void>) {
   if (!resource.bucket?.trim() || !resource.storage_path?.trim()) {
     throw new Error(`Storage configuration is incomplete for resource ${resource.id}: bucket or file path is missing.`);
   }
@@ -245,12 +273,14 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     const reason = downloadError?.message === "Object not found" ? "file was not found" : "download failed";
     throw new Error(`Supabase Storage ${reason} for resource ${resource.id} (${resource.bucket}/${resource.storage_path}).`);
   }
+  await onStep?.("detecting_metadata",15);
+  await onStep?.("extracting_text",25);
   const extractedText = await extractFileText(resource, Buffer.from(await file.arrayBuffer()));
   if (!extractedText) throw new Error("No text was extracted. This appears to be a scanned PDF and OCR is needed before it can be processed.");
-  await onExtracted?.();
 
   const chunks = splitResourceChunks(extractedText);
   if (!chunks.length) throw new Error("No searchable text chunks could be created.");
+  await onStep?.("creating_embeddings",35);
   const embeddings = await generateDocumentEmbeddings(chunks);
   const metadata = {
     title: resource.title,
@@ -268,7 +298,7 @@ export async function processResourceContent(client: SupabaseClient, resource: P
 
   const { error: clearChunkError } = await client.from("ai_chunks").delete().eq("resource_id", resource.id);
   if (clearChunkError) throw clearChunkError;
-  const { error: chunkError } = await client.from("ai_chunks").insert(chunks.map((content, index) => ({
+  const { data:savedChunks,error: chunkError } = await client.from("ai_chunks").insert(chunks.map((content, index) => ({
     subject_id: resource.subject_id,
     resource_id: resource.id,
     chunk_index: index,
@@ -276,19 +306,43 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     embedding: `[${embeddings[index]!.join(",")}]`,
     embedding_model: AI_EMBEDDING_MODEL,
     metadata,
-  })));
+  }))).select("id,chunk_index");
   if (chunkError) throw chunkError;
+  // Keep typed chunks for notes/syllabi/reports while ai_chunks remains the
+  // single vector source used by the existing RAG retrieval path.
+  const {error:clearTypedError}=await client.from("resource_chunks").delete().eq("resource_id",resource.id);
+  if(!clearTypedError){
+    let chunkTags=new Map<string,any>();
+    if(!["PAST_PAPER","MARKING_SCHEME","WORKSHEET","TEST","TOPICAL"].includes(resource.resource_type)){
+      try{chunkTags=await tagQuestionsForSubject(client,resource.subjects?.code??"",resource.subjects?.name??"Subject",chunks.map((text,index)=>({number:String(index+1),text,marks:null})))}catch{chunkTags=new Map()}
+    }
+    const{data:typedChunks}=await client.from("resource_chunks").insert(chunks.map((content,index)=>{
+      const tag=chunkTags.get(String(index+1));
+      return {
+      resource_id:resource.id,subject_id:resource.subject_id,level:resource.level,board:resource.board||resource.subjects?.board,
+      year:resource.year,session:resource.session,paper_code:resource.paper_code,variant:resource.variant,
+      chunk_type:chunkTypeForResource(resource.resource_type),
+      title:`${resource.title} · Part ${index+1}`,content,extracted_text:content,
+      topic:tag?.topic??null,subtopic:tag?.subtopic??null,embedding:`[${embeddings[index]!.join(",")}]`,
+      source_reference:`${resource.original_filename}#chunk-${index+1}`,
+      metadata_json:{...metadata,chunkIndex:index,confidence:tag?.confidence??null,needsReview:tag?.needsReview??false},
+      ai_chunk_id:savedChunks?.find(row=>Number(row.chunk_index)===index)?.id??null,
+    }})).select("id,topic,subtopic,metadata_json");
+    if(typedChunks?.length)await client.from("topic_tagging_audits").insert(typedChunks.map(chunk=>({source_type:"resource_chunk",source_id:chunk.id,resource_id:resource.id,predicted_topic:chunk.topic,predicted_subtopic:chunk.subtopic,new_topic:chunk.topic,new_subtopic:chunk.subtopic,confidence:Number((chunk.metadata_json as any)?.confidence??0),needs_review:Boolean((chunk.metadata_json as any)?.needsReview),review_status:(chunk.metadata_json as any)?.needsReview?"needs_review":"verified"})));
+  }
 
   let indexedQuestions = 0;
   let linkedAnswers = 0;
   let classificationWarning: string | null = null;
   const numbered = splitNumberedQuestions(extractedText);
+  await onStep?.("splitting_questions",40);
   const questionBearing = ["PAST_PAPER", "WORKSHEET", "TEST", "TOPICAL"].includes(resource.resource_type);
   if (questionBearing && numbered.length === 0) {
     throw new Error("Question extraction failed: text was extracted, but no numbered questions were detected. Review the PDF or run OCR.");
   }
 
   if (questionBearing && numbered.length) {
+    await onStep?.("tagging_topics",55);
     let classified = new Map();
     try {
       classified = await tagQuestionsForSubject(client, resource.subjects?.code ?? "", resource.subjects?.name ?? "Subject", numbered);
@@ -303,6 +357,7 @@ export async function processResourceContent(client: SupabaseClient, resource: P
       const tag = classified.get(question.number);
       const cleanedText = cleanQuestionText(question.text);
       const textQuality = questionTextQuality(cleanedText);
+      const questionType=classifyQuestionTypeDetailed(cleanedText);
       return {
         subject_id: resource.subject_id,
         resource_id: resource.id,
@@ -314,6 +369,11 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         topic: tag?.topic ?? "Unclassified",
         subtopic: tag?.subtopic ?? null,
         difficulty: tag?.difficulty ?? "MEDIUM",
+        question_type: questionType.questionType,
+        question_type_confidence:questionType.confidence,
+        question_type_needs_review:questionType.needsReview,
+        question_type_reason:questionType.reason,
+        question_type_metadata:{subtypes:questionType.subtypes},
         marks: question.marks,
         total_marks: question.marks,
         raw_extracted_text: question.text,
@@ -329,12 +389,27 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         confidence: tag?.confidence ?? 0,
         needs_review: textQuality === "needs_review" || textQuality === "failed" || (tag?.needsReview ?? true),
         tagging_method: tag?.method ?? "missing_map",
+        topic_source:tag?.method==="manual"?"admin_verified":tag?.method?.includes("ai")?"ai_tagged":tag?"inferred_from_text":"unknown",
         tagging_note: tag?.note ?? "No topic map found for this subject.",
         topic_classified: Boolean(tag && !tag.needsReview && tag.confidence >= 0.85),
         student_verified: textQuality !== "needs_review" && textQuality !== "failed" && Boolean(tag && !tag.needsReview && tag.confidence >= 0.60),
+        review_status:textQuality !== "needs_review" && textQuality !== "failed" && Boolean(tag && !tag.needsReview && tag.confidence >= 0.60)?"verified":"needs_review",
       };
     })).select("id,question_number");
     if (questionError) throw questionError;
+    const questionTexts=numbered.map(question=>cleanQuestionText(question.text));
+    const questionEmbeddings=await generateDocumentEmbeddings(questionTexts);
+    await client.from("resource_chunks").delete().eq("resource_id",resource.id).eq("chunk_type","question");
+    await client.from("resource_chunks").insert(numbered.map((question,index)=>{
+      const tag=classified.get(question.number),saved=savedQuestions?.find(row=>row.question_number===question.number);
+      return {resource_id:resource.id,subject_id:resource.subject_id,level:resource.level,board:resource.board||resource.subjects?.board,year:resource.year,session:resource.session,paper_code:resource.paper_code,variant:resource.variant,chunk_type:"question",question_number:question.number,title:`Question ${question.number}`,content:questionTexts[index],extracted_text:questionTexts[index],topic:tag?.topic??"Unclassified",subtopic:tag?.subtopic??null,marks:question.marks,difficulty:tag?.difficulty??"MEDIUM",embedding:`[${questionEmbeddings[index]!.join(",")}]`,source_reference:`${resource.original_filename}#question-${question.number}`,metadata_json:{questionId:saved?.id??null,confidence:tag?.confidence??0,needsReview:tag?.needsReview??true}};
+    }));
+    await client.from("topic_tagging_audits").delete().eq("source_type","question").in("source_id",(savedQuestions??[]).map(q=>q.id));
+    if(savedQuestions?.length) await client.from("topic_tagging_audits").insert(savedQuestions.map(question=>{
+      const tag=classified.get(question.question_number);
+      return {source_type:"question",source_id:question.id,resource_id:resource.id,question_id:question.id,predicted_topic:tag?.topic??"Unclassified",predicted_subtopic:tag?.subtopic??null,new_topic:tag?.topic??"Unclassified",new_subtopic:tag?.subtopic??null,confidence:tag?.confidence??0,needs_review:tag?.needsReview??true,review_status:tag&&!tag.needsReview&&tag.confidence>=0.60?"verified":"needs_review",raw_model_output:{method:tag?.method??"missing_map",note:tag?.note??null}};
+    }));
+    await onStep?.("rendering_pages",75);
     try {
       if (screenshotMode() !== "pre_generate") {
         await client.from("question_index").update({ screenshot_status: "not_generated" }).eq("resource_id", resource.id);
@@ -348,6 +423,7 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     }
     indexedQuestions = numbered.length;
     if (resource.resource_type === "PAST_PAPER") {
+      await onStep?.("linking_marking_scheme",85);
       const { data: schemes, error: schemeError } = await client.from("resources").select("id,extracted_text")
         .eq("resource_type", "MARKING_SCHEME").eq("related_resource_id", resource.id).not("extracted_text", "is", null);
       if (schemeError) throw schemeError;
@@ -356,10 +432,12 @@ export async function processResourceContent(client: SupabaseClient, resource: P
   }
 
   if (resource.resource_type === "MARKING_SCHEME" && numbered.length) {
+    await onStep?.("linking_marking_scheme",85);
     const paperResourceId = await resolveQuestionPaper(client, resource);
     if (!paperResourceId) classificationWarning = "Marking scheme processed but not linked yet. Upload a past paper with the same subject, level, year, session, paper code, and variant.";
     else linkedAnswers += await linkAnswerRows(client, paperResourceId, resource.id, extractMarkingSchemeAnswers(extractedText));
   }
 
+  await onStep?.("updating_analytics",95);
   return { extractedText, chunks: chunks.length, embeddings: embeddings.length, indexedQuestions, linkedAnswers, classificationWarning };
 }

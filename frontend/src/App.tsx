@@ -24,6 +24,9 @@ import AdminProcessing from "@/pages/admin-processing";
 import TopicMapManager from "@/pages/topic-map-manager";
 import NotFound from "@/pages/not-found";
 import PaperChecker from "@/pages/paper-checker";
+import PaperAnalyzerAgent from "@/pages/paper-analyzer-agent";
+import RepeatedTopics from "@/pages/repeated-topics";
+import RevisionPlanner from "@/pages/revision-planner";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -52,6 +55,9 @@ function Router() {
       <Route path="/ai" component={AiTutor} />
       <Route path="/progress" component={Progress} />
       <Route path="/paper-checker" component={PaperChecker} />
+      <Route path="/paper-analyzer" component={PaperAnalyzerAgent} />
+      <Route path="/repeated-topics" component={RepeatedTopics} />
+      <Route path="/revision-planner" component={RevisionPlanner} />
       <Route path="/admin" component={Admin} />
       <Route path="/admin/testing" component={PaperTesting} />
       <Route path="/admin/ai-testing" component={AiAssistantTesting} />

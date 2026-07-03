@@ -1,16 +1,22 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { markTypedAnswer } from "./paper-checker";
+import {isOfficialQuestionAnswer} from "./marking-scheme-intelligence";
 
 export async function getQuestionContext(client: SupabaseClient, resourceId: number) {
   const { data, error } = await client.from("question_index")
-    .select("id,resource_id,question_number,question_part,display_question_text,clean_question_text,question_text,topic,subtopic,total_marks,marks,answer_text,marking_scheme_answer_id,marking_scheme_link_status,confidence")
+    .select("id,resource_id,subject_id,year,session,paper_code,variant,question_number,question_part,display_question_text,clean_question_text,question_text,topic,subtopic,total_marks,marks,answer_text,marking_scheme_answer_id,marking_scheme_link_status,confidence,resources(level,year,session,paper_number,paper_code,variant),subjects(code,level)")
     .eq("resource_id", resourceId).eq("student_verified", true).order("id");
   if (error) throw error;
-  return data ?? [];
+  const rows=data??[],answerIds=[...new Set(rows.map(row=>Number(row.marking_scheme_answer_id)).filter(Boolean))];
+  const answers=answerIds.length?await client.from("marking_scheme_answers").select("id,resource_id,syllabus_code,level,year,session,paper_number,variant,question_number,question_part,answer_type,is_question_specific,confidence,extraction_confidence,link_confidence,resources(level,year,session,paper_number,paper_code,variant,subjects(code,level))").in("id",answerIds):{data:[],error:null};
+  if(answers.error)throw answers.error;
+  const byId=new Map((answers.data??[]).map(answer=>[Number(answer.id),answer]));
+  return rows.map(row=>({...row,marking_scheme_answers:row.marking_scheme_answer_id?byId.get(Number(row.marking_scheme_answer_id))??null:null}));
 }
 
-export function getLinkedMarkingScheme<T extends { answer_text?: string | null; marking_scheme_link_status?: string | null; marking_scheme_answer_id?: number | null }>(question: T) {
-  const linked = Boolean(question.answer_text?.trim()) && ["linked", "partial", "linked_exact", "linked_partial"].includes(question.marking_scheme_link_status ?? "");
+export function getLinkedMarkingScheme<T extends { answer_text?: string | null; marking_scheme_link_status?: string | null; marking_scheme_answer_id?: number | null;marking_scheme_answers?:any }>(question: T) {
+  const answer=Array.isArray(question.marking_scheme_answers)?question.marking_scheme_answers[0]:question.marking_scheme_answers;
+  const linked = Boolean(question.answer_text?.trim()) && isOfficialQuestionAnswer(answer,question.marking_scheme_link_status,question);
   return linked ? { answerText: question.answer_text!.trim(), answerId: question.marking_scheme_answer_id ?? null, status: question.marking_scheme_link_status } : null;
 }
 

@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 
-export type BulkResourceType = "PAST_PAPER" | "MARKING_SCHEME" | "GRADE_THRESHOLD" | "EXAMINER_REPORT" | "INSERT" | "SOURCE_FILE" | "SYLLABUS";
+export type BulkResourceType = "PAST_PAPER" | "MARKING_SCHEME" | "GRADE_THRESHOLD" | "EXAMINER_REPORT" | "INSERT" | "SOURCE_FILE" | "SYLLABUS" | "NOTES" | "WORKSHEET";
 export type BulkSession = "MAY_JUNE" | "OCT_NOV" | "FEB_MAR";
 
 export type FilenameDetection = {
@@ -61,9 +61,10 @@ export async function expandBulkFiles(files: File[]) {
     if (!/\.zip$/i.test(file.name)) continue;
     const zip = await JSZip.loadAsync(file);
     for (const entry of Object.values(zip.files)) {
-      if (entry.dir || !/\.pdf$/i.test(entry.name)) continue;
+      if (entry.dir) continue;
       const blob = await entry.async("blob");
-      output.push(new File([blob], entry.name.split("/").pop()!, { type: "application/pdf", lastModified: file.lastModified }));
+      const name=entry.name.split("/").pop()!;
+      output.push(new File([blob], name, { type: /\.pdf$/i.test(name)?"application/pdf":"application/octet-stream", lastModified: file.lastModified }));
     }
   }
   return output;

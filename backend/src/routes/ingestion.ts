@@ -8,6 +8,7 @@ import pdf from "pdf-parse/lib/pdf-parse.js";
 import { parsePaperOneQuestions } from "../services/physics-paper-parser";
 import { classifyQuestions, isAiConfigured } from "../lib/ai-service";
 import { canonicalTopic, fallbackTopicForSubject } from "../services/rag-utils";
+import { detectResourceMetadata } from "../services/metadata-detector";
 
 const router: IRouter = Router();
 const upload = multer({
@@ -120,6 +121,24 @@ router.post("/papers/:paperId/process", requireAdmin, async (req, res): Promise<
     await client.from("papers").update({ ingestion_status: "failed", processing_error: message }).eq("id", paperId);
     await client.from("uploads").update({ status: "failed", error_message: message }).eq("paper_id", paperId).eq("source_type", "QUESTION_PAPER");
     res.status(422).json({ error: message });
+  }
+});
+
+router.post("/bulk-import/detect",requireAdmin,upload.single("file"),async(req,res):Promise<void>=>{
+  const file=req.file;
+  if(!file){res.status(400).json({error:"Choose one PDF to detect."});return;}
+  try{
+    const parsed=await pdf(file.buffer,{max:3});
+    const detected=detectResourceMetadata(file.originalname,parsed.text);
+    const code=String(detected.metadata.syllabusCode??"");
+    const client=res.locals.supabase as SupabaseClient;
+    const{data:mapping}=code?await client.from("subject_code_map").select("subject_id,subjects(name,code,level)").eq("subject_code",code).maybeSingle():{data:null};
+    const subject=Array.isArray(mapping?.subjects)?mapping.subjects[0]:mapping?.subjects;
+    const component=code&&detected.metadata.paperNumber?await client.from("cambridge_component_mappings").select("display_name").eq("syllabus_code",code).eq("component_number",detected.metadata.paperNumber).lte("active_from_year",Number(detected.metadata.year??9999)).or(`active_to_year.is.null,active_to_year.gte.${Number(detected.metadata.year??0)}`).limit(1).maybeSingle():null;
+    res.json({...detected,metadata:{...detected.metadata,subjectName:subject?.name??detected.metadata.subjectName,level:subject?.level??detected.metadata.level,subjectId:mapping?.subject_id??null,componentName:component?.data?.display_name??null}});
+  }catch(error){
+    req.log.warn({fileName:file.originalname,error:error instanceof Error?error.message:String(error)},"Bulk metadata PDF detection failed");
+    res.json({...detectResourceMetadata(file.originalname),warnings:["PDF text could not be read. Detection used the filename only."],pdfReadFailed:true});
   }
 });
 

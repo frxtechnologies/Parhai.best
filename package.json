@@ -20,7 +20,13 @@
     "typecheck:backend": "npm --prefix backend run typecheck",
     "test": "npm --prefix backend test && tsx --test frontend/src/**/*.test.ts"
     ,"generate:screenshots": "npm --prefix backend run generate:screenshots --",
-    "audit:questions": "npm --prefix backend run audit:questions"
+    "audit:questions": "npm --prefix backend run audit:questions",
+    "eval:ai": "npm --prefix backend run eval:ai",
+    "eval:ai:coverage": "npm --prefix backend run eval:ai:coverage",
+    "eval:ai:dynamic": "npm --prefix backend run eval:ai:dynamic",
+    "eval:marking-links": "npm --prefix backend run eval:marking-links",
+    "audit:marking-links": "npm --prefix backend run audit:marking-links",
+    "repair:marking-links": "npm --prefix backend run repair:marking-links --"
   },
   "engines": {
     "node": ">=20"

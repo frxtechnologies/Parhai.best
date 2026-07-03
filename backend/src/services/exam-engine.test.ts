@@ -9,6 +9,7 @@ test("separates paper lookup, question search, analysis, and trends",()=>{
   assert.equal(detectExamIntent("Is Electricity increasing in recent papers?"),"topic_trend");
   assert.equal(detectExamIntent("How many Light questions are in this paper?"),"topic_count");
   assert.equal(detectExamIntent("Show repeated Electricity questions"),"repeated_questions");
+  assert.equal(detectExamIntent("Show only Light questions with official marking schemes linked"),"question_search");
 });
 
 test("maps explicit Cambridge subject aliases deterministically",()=>{

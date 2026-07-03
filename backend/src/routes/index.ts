@@ -7,6 +7,9 @@ import aiProviderRouter from "./ai-provider";
 import topicMapsRouter from "./topic-maps";
 import paperCheckerRouter from "./paper-checker";
 import examEngineRouter from "./exam-engine";
+import studyAgentsRouter from "./study-agents";
+import trainingDatasetRouter from "./training-dataset";
+import bulkImportRouter from "./bulk-import";
 
 const router: IRouter = Router();
 
@@ -18,5 +21,8 @@ router.use(aiProviderRouter);
 router.use(topicMapsRouter);
 router.use(paperCheckerRouter);
 router.use(examEngineRouter);
+router.use(studyAgentsRouter);
+router.use(trainingDatasetRouter);
+router.use(bulkImportRouter);
 
 export default router;

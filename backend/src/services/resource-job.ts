@@ -25,10 +25,19 @@ export async function processResourceById(client: SupabaseClient, resourceId: nu
   try {
     const { error: processingError } = await client.from("resources").update({ status: "processing", processing_status: "processing", processing_error: null, updated_at: now }).eq("id", resourceId);
     if (processingError) throw processingError;
-    const result = await processResourceContent(client, resource as unknown as ProcessableResource, async () => {
-      const { error: indexingError } = await client.from("processing_jobs").update({ status: "indexing", updated_at: new Date().toISOString() }).eq("id", jobId);
+    const result = await processResourceContent(client, resource as unknown as ProcessableResource, async (step,progress) => {
+      const{data:current}=await client.from("processing_jobs").select("safe_logs").eq("id",jobId).single();
+      const logs=Array.isArray(current?.safe_logs)?current.safe_logs.slice(-24):[];
+      const { error: indexingError } = await client.from("processing_jobs").update({
+        status:step,current_step:step,progress_percent:progress,
+        safe_logs:[...logs,{step,progress,at:new Date().toISOString()}],updated_at:new Date().toISOString(),
+      }).eq("id", jobId);
       if (indexingError) throw indexingError;
     });
+    // Analytics are calculated from question_index on demand. Clearing caches
+    // makes every completed upload visible immediately without model training.
+    await client.from("paper_analyses").delete().eq("resource_id",resourceId);
+    await client.from("repeated_topic_stats").delete().eq("subject_id",resource.subject_id);
     const completedAt = new Date().toISOString();
     const topicStatus = result.indexedQuestions
       ? result.classificationWarning ? "needs_review" : "classified"
@@ -49,7 +58,8 @@ export async function processResourceById(client: SupabaseClient, resourceId: nu
       updated_at: completedAt,
     }).eq("id", resourceId);
     if (updateError) throw updateError;
-    const { error: completeJobError } = await client.from("processing_jobs").update({ status: "completed", error_message: result.classificationWarning, completed_at: completedAt, updated_at: completedAt }).eq("id", jobId);
+    const finalStatus=result.classificationWarning?"needs_manual_review":"completed";
+    const { error: completeJobError } = await client.from("processing_jobs").update({ status: finalStatus,current_step:finalStatus,progress_percent:100, error_message: result.classificationWarning, completed_at: completedAt, updated_at: completedAt }).eq("id", jobId);
     if (completeJobError) throw completeJobError;
     return result;
   } catch (cause) {

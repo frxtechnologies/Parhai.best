@@ -1,5 +1,7 @@
 # Parhai.com
 
+> Project status: paused as of July 2026. The complete restorable codebase and Supabase migrations are archived here without private credentials. Start with [docs/SETUP.md](docs/SETUP.md) and [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
+
 Parhai.com is an AI-assisted study platform for Cambridge O-Level and A-Level students. Students authenticate with Supabase, select their level and subjects, open subject workspaces, browse papers and notes, and ask a subject-scoped assistant questions backed by uploaded source material.
 
 This standalone repository is the Parhai.com project source of truth. It is designed to run independently from the FRX Technologies website.

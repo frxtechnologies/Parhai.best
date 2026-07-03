@@ -37,6 +37,41 @@ export function requestResourceProcessing(resourceId: number, accessToken: strin
   });
 }
 
+export async function detectBulkImportMetadata(file: File) {
+  const form=new FormData();form.append("file",file);
+  const response=await fetch(`${API_BASE_URL}/api/bulk-import/detect`,{method:"POST",headers:{Authorization:`Bearer ${await resourceAdminToken()}`},body:form});
+  const body=await response.json() as Record<string,unknown>&{error?:string};
+  if(!response.ok)throw new Error(body.error??"Could not inspect this PDF.");
+  return body;
+}
+
+async function bulkAdminRequest(path: string, init: RequestInit = {}) {
+  const response = await fetch(`${API_BASE_URL}/api${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${await resourceAdminToken()}`, ...init.headers },
+  });
+  const body = await response.json() as any;
+  if (!response.ok) {
+    const error=new Error(body.error ?? "Bulk import request failed.") as Error&{adminDetails?:string};
+    error.adminDetails=body.adminDetails;throw error;
+  }
+  return body;
+}
+
+export const createBulkImportBatch = (totalFiles: number) =>
+  bulkAdminRequest("/bulk-import/batches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ totalFiles }) });
+export async function uploadBulkImportFile(batchId: number, file: File) {
+  const form = new FormData(); form.append("file", file);
+  return bulkAdminRequest(`/bulk-import/batches/${batchId}/files`, { method: "POST", body: form });
+}
+export const getBulkImportBatch = (batchId: number) => bulkAdminRequest(`/bulk-import/batches/${batchId}`);
+export const retryBulkImportDetection = (fileId: number) => bulkAdminRequest(`/bulk-import/files/${fileId}/retry-detection`, { method: "POST" });
+export const updateBulkImportMetadata = (fileId: number, metadata: Record<string, unknown>) =>
+  bulkAdminRequest(`/bulk-import/files/${fileId}/metadata`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ metadata }) });
+export const importBulkImportFiles = (batchId: number, fileIds: number[]) =>
+  bulkAdminRequest(`/bulk-import/batches/${batchId}/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fileIds }) });
+export const skipBulkImportFile = (fileId: number) => bulkAdminRequest(`/bulk-import/files/${fileId}/skip`, { method: "POST" });
+
 export type ResourceDeletionPreview = {
   id: number;
   title: string;

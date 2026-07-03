@@ -4,6 +4,7 @@ import { requireUser } from "../middleware/auth";
 import { isServiceRoleConfigured, supabaseAdmin } from "../lib/supabase";
 import { generateExamFeedback, getLinkedMarkingScheme, getQuestionContext, getSimilarQuestions, getTopicContext } from "../services/cambridge-context";
 import { answerExtractionService } from "../services/answer-extraction";
+import { recordPaperCheckerPerformance } from "../services/paper-checker-feedback";
 
 const router: IRouter = Router();
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:25*1024*1024,files:1},fileFilter:(_req,file,cb)=>cb(null,file.mimetype==="application/pdf"||file.originalname.toLowerCase().endsWith(".pdf"))});
@@ -109,6 +110,14 @@ router.post("/paper-checker/check", requireUser, async (req,res) => {
   await supabaseAdmin.from("paper_check_submissions").update({
     status:needsReview?"needs_review":"completed",marking_status:needsReview?"needs_review":"completed",total_awarded_marks:totalAwarded,total_possible_marks:totalPossible,percentage,updated_at:new Date().toISOString(),
   }).eq("id",submission.id);
+  let learningMemory={events:0,topics:0};
+  try{
+    learningMemory=await recordPaperCheckerPerformance(supabaseAdmin,{
+      userId:user.id,subjectId:Number(paper.subject_id),submissionId:submission.id,results,
+    });
+  }catch(error){
+    req.log.warn({submissionId:submission.id,error:error instanceof Error?error.message:String(error)},"Paper Checker learning memory update failed");
+  }
   const topicContext=await getTopicContext(supabaseAdmin,(subject as {code?:string}|null)?.code??"");
   const weakest=[...results].filter((r)=>r.awardedMarks!==null).sort((a,b)=>(a.awardedMarks!/Math.max(a.maxMarks,1))-(b.awardedMarks!/Math.max(b.maxMarks,1)))[0];
   const similarQuestions=weakest?await getSimilarQuestions(supabaseAdmin,{subjectId:paper.subject_id,topic:weakest.topic,subtopic:weakest.subtopic,excludeIds:questions.map((q)=>Number(q.id)),limit:3}):[];
@@ -122,7 +131,7 @@ router.post("/paper-checker/check", requireUser, async (req,res) => {
       :{uploaded_file_deleted:true,uploaded_file_deleted_at:deletedAt,file_retention_status:"deleted",uploaded_file_path:null,updated_at:deletedAt}
     ).eq("id",submission.id);
   }
-  res.json({submissionId:submission.id,totalAwarded,totalPossible,percentage,status:needsReview?"needs_review":"completed",results,similarQuestions,topicMapAvailable:topicContext.count>0});
+  res.json({submissionId:submission.id,totalAwarded,totalPossible,percentage,status:needsReview?"needs_review":"completed",results,similarQuestions,topicMapAvailable:topicContext.count>0,learningMemory});
 });
 
 export default router;

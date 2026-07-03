@@ -12,6 +12,7 @@ export type ResourceDeletionPreview = {
   indexedQuestions: number;
   searchableChunks: number;
   processingJobs: number;
+  typedChunks: number;
 };
 
 async function exactCount(client: SupabaseClient, table: string, resourceId: number) {
@@ -25,10 +26,11 @@ export async function getResourceDeletionPreview(client: SupabaseClient, resourc
     .select("id,title,original_filename,storage_path,subject_id,year,resource_type,subjects(name)")
     .eq("id", resourceId).single();
   if (error || !resource) throw error ?? new Error("Resource not found.");
-  const [indexedQuestions, searchableChunks, processingJobs] = await Promise.all([
+  const [indexedQuestions, searchableChunks, processingJobs,typedChunks] = await Promise.all([
     exactCount(client, "question_index", resourceId),
     exactCount(client, "ai_chunks", resourceId),
     exactCount(client, "processing_jobs", resourceId),
+    exactCount(client,"resource_chunks",resourceId),
   ]);
   const subject = Array.isArray(resource.subjects) ? resource.subjects[0] : resource.subjects;
   return {
@@ -43,6 +45,7 @@ export async function getResourceDeletionPreview(client: SupabaseClient, resourc
     indexedQuestions,
     searchableChunks,
     processingJobs,
+    typedChunks,
   };
 }
 
@@ -62,15 +65,18 @@ export async function permanentlyDeleteResource(client: SupabaseClient, resource
 
   const { data: result, error: databaseError } = await client.rpc("delete_resource_records", { p_resource_id: resourceId });
   if (!databaseError) {
+    await client.from("repeated_topic_stats").delete().eq("subject_id",resource.subject_id);
     const folderEnd = resource.storage_path.lastIndexOf("/");
     const folder = folderEnd >= 0 ? resource.storage_path.slice(0, folderEnd) : "";
     const fileName = folderEnd >= 0 ? resource.storage_path.slice(folderEnd + 1) : resource.storage_path;
-    const [storageAudit, resourceAudit, questionAudit, chunkAudit, jobAudit, legacyQuestionsAudit, legacyRecordAudit] = await Promise.all([
+    const [storageAudit, resourceAudit, questionAudit, chunkAudit, typedChunkAudit, jobAudit, analysisAudit, legacyQuestionsAudit, legacyRecordAudit] = await Promise.all([
       client.storage.from(resource.bucket).list(folder, { search: fileName, limit: 100 }),
       client.from("resources").select("id", { count: "exact", head: true }).eq("id", resourceId),
       client.from("question_index").select("id", { count: "exact", head: true }).eq("resource_id", resourceId),
       client.from("ai_chunks").select("id", { count: "exact", head: true }).eq("resource_id", resourceId),
+      client.from("resource_chunks").select("id", { count: "exact", head: true }).eq("resource_id", resourceId),
       client.from("processing_jobs").select("id", { count: "exact", head: true }).eq("resource_id", resourceId),
+      client.from("paper_analyses").select("id", { count: "exact", head: true }).eq("resource_id",resourceId),
       resource.legacy_source === "papers" && resource.legacy_source_id
         ? client.from("questions").select("id", { count: "exact", head: true }).eq("paper_id", resource.legacy_source_id)
         : Promise.resolve({ count: 0, error: null }),
@@ -78,7 +84,7 @@ export async function permanentlyDeleteResource(client: SupabaseClient, resource
         ? client.from(resource.legacy_source).select("id", { count: "exact", head: true }).eq("id", resource.legacy_source_id)
         : Promise.resolve({ count: 0, error: null }),
     ]);
-    const auditErrors = [storageAudit.error, resourceAudit.error, questionAudit.error, chunkAudit.error, jobAudit.error, legacyQuestionsAudit.error, legacyRecordAudit.error].filter(Boolean);
+    const auditErrors = [storageAudit.error, resourceAudit.error, questionAudit.error, chunkAudit.error,typedChunkAudit.error, jobAudit.error,analysisAudit.error, legacyQuestionsAudit.error, legacyRecordAudit.error].filter(Boolean);
     if (auditErrors.length) throw new Error(`Post-delete audit failed: ${auditErrors.map((item) => item!.message).join("; ")}`);
     const storageFileRemoved = !(storageAudit.data ?? []).some((item) => item.name === fileName);
     const audit = {
@@ -86,7 +92,9 @@ export async function permanentlyDeleteResource(client: SupabaseClient, resource
       resourceRowsRemaining: resourceAudit.count ?? 0,
       questionIndexRowsRemaining: questionAudit.count ?? 0,
       aiChunkRowsRemaining: chunkAudit.count ?? 0,
+      typedChunkRowsRemaining:typedChunkAudit.count??0,
       processingJobRowsRemaining: jobAudit.count ?? 0,
+      paperAnalysisRowsRemaining:analysisAudit.count??0,
       legacyQuestionRowsRemaining: legacyQuestionsAudit.count ?? 0,
       legacyResourceRowsRemaining: legacyRecordAudit.count ?? 0,
     };

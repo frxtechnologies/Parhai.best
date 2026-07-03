@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { detectRequestedTopic } from "./rag-utils";
+import { isOfficialQuestionAnswer } from "./marking-scheme-intelligence";
 
 export type ExamFilters = {
   subjectCode?: string;
@@ -14,6 +15,7 @@ export type ExamFilters = {
   subtopic?: string;
   difficulty?: "EASY"|"MEDIUM"|"HARD";
   markingSchemeOnly?: boolean;
+  questionType?:"calculation"|"theory"|"diagram"|"graph"|"definition"|"explanation"|"data_table"|"practical"|"mixed"|"unknown";
   limit?: number;
   offset?: number;
 };
@@ -28,6 +30,7 @@ export function detectSubjectCode(message:string):"4024"|"5054"|null {
 
 export function detectExamIntent(message:string):ExamIntent {
   if(/\bhow many\b/i.test(message)) return "topic_count";
+  if(/\bquestions?\b/i.test(message)&&(/\b(find|give)\b/i.test(message)||/\bmark(?:ing)? schemes?\b/i.test(message))) return "question_search";
   if(/\b(analy[sz]e|topic breakdown|each topic|in this paper|in .*paper)\b/i.test(message)) return "paper_analysis";
   if(/\b(increasing|decreasing|trend|over the years?|recent papers?)\b/i.test(message)) return "topic_trend";
   if(/\b(repeated|similar patterns?|comes? up often)\b/i.test(message)) return "repeated_questions";
@@ -71,7 +74,7 @@ export function createExamEngine(client:SupabaseClient) {
   async function findQuestions(filters:ExamFilters) {
     const sid=await subjectId(client,filters);
     let query=client.from("question_index")
-      .select("id,resource_id,subject_id,question_number,question_part,display_question_text,clean_question_text,topic,subtopic,difficulty,marks,total_marks,year,session,paper_code,variant,source_page,bbox,screenshot_status,question_screenshot_url,answer_text,marking_scheme_answer_id,marking_scheme_link_status,marking_scheme_answers(resource_id,source_page,marks),resources!inner(id,bucket,storage_path,is_approved),subjects(name,code)",{count:"exact"})
+      .select("id,resource_id,subject_id,question_number,question_part,display_question_text,clean_question_text,topic,subtopic,difficulty,marks,total_marks,year,session,paper_code,variant,source_page,bbox,screenshot_status,question_screenshot_url,answer_text,marking_scheme_answer_id,marking_scheme_link_status,marking_scheme_status,question_type,question_type_confidence,question_type_needs_review,question_type_metadata,verification_status,needs_review,student_verified,resources!inner(id,bucket,storage_path,is_approved,level,year,session,paper_number,paper_code,variant),subjects(name,code,level)",{count:"exact"})
       .eq("student_verified",true).eq("needs_review",false).eq("resources.is_approved",true).not("clean_question_text","is",null);
     if(sid) query=query.eq("subject_id",sid);
     if(filters.year) query=query.eq("year",filters.year);
@@ -83,11 +86,16 @@ export function createExamEngine(client:SupabaseClient) {
     if(filters.topic) query=query.ilike("topic",filters.topic);
     if(filters.subtopic) query=query.ilike("subtopic",`%${filters.subtopic}%`);
     if(filters.difficulty) query=query.eq("difficulty",filters.difficulty);
-    if(filters.markingSchemeOnly) query=query.in("marking_scheme_link_status",["linked","partial","linked_exact","linked_partial"]);
+    if(filters.questionType) query=query.in("question_type",[filters.questionType,"mixed"]);
+    if(filters.markingSchemeOnly) query=query.in("marking_scheme_link_status",["linked","linked_exact"]);
     const {limit,offset}=boundedPage(filters);
     const {data,error,count}=await query.order("year",{ascending:false}).order("confidence",{ascending:false}).order("id",{ascending:true}).range(offset,offset+limit-1);
     if(error) throw error;
-    return {rows:data??[],total:count??0,limit,offset,hasMore:offset+limit<(count??0)};
+    const rows=data??[],answerIds=[...new Set(rows.map(row=>Number(row.marking_scheme_answer_id)).filter(Boolean))];
+    const answers=answerIds.length?await client.from("marking_scheme_answers").select("id,resource_id,syllabus_code,level,year,session,paper_number,variant,question_number,question_part,source_page,marks,answer_type,is_question_specific,confidence,extraction_confidence,link_confidence,resources(level,year,session,paper_number,paper_code,variant,subjects(code,level))").in("id",answerIds):{data:[],error:null};
+    if(answers.error)throw answers.error;
+    const byId=new Map((answers.data??[]).map(answer=>[Number(answer.id),answer]));
+    return {rows:rows.map(row=>({...row,marking_scheme_answers:row.marking_scheme_answer_id?byId.get(Number(row.marking_scheme_answer_id))??null:null})),total:count??0,limit,offset,hasMore:offset+limit<(count??0)};
   }
 
   async function findQuestionsByTopic(subjectCode:string,topic:string,filters:ExamFilters={}) {
@@ -101,18 +109,23 @@ export function createExamEngine(client:SupabaseClient) {
 
   async function getQuestionWithSources(questionId:number) {
     const {data,error}=await client.from("question_index")
-      .select("*,resources(id,title,bucket,storage_path,original_filename,related_resource_id),subjects(name,code),question_images(*),marking_scheme_answers(resource_id,source_page)")
+      .select("*,resources(id,title,bucket,storage_path,original_filename,related_resource_id),subjects(name,code,level),question_images(*)")
       .eq("id",questionId).eq("student_verified",true).eq("needs_review",false).single();
     if(error) throw error;
-    return data;
+    const answer=data.marking_scheme_answer_id?await client.from("marking_scheme_answers").select("id,resource_id,source_page,answer_type,is_question_specific,confidence,extraction_confidence,link_confidence,clean_answer_text").eq("id",data.marking_scheme_answer_id).maybeSingle():{data:null,error:null};
+    if(answer.error)throw answer.error;
+    return {...data,marking_scheme_answers:answer.data};
   }
 
   async function getLinkedMarkingScheme(questionId:number) {
     const {data,error}=await client.from("question_index")
-      .select("id,answer_text,marking_scheme_answer_id,marking_scheme_link_status,marking_scheme_answers(*)")
+      .select("id,answer_text,marking_scheme_answer_id,marking_scheme_link_status")
       .eq("id",questionId).single();
     if(error) throw error;
-    return ["linked","partial","linked_exact","linked_partial"].includes(data.marking_scheme_link_status)?data:null;
+    if(!data.marking_scheme_answer_id)return null;
+    const answer=await client.from("marking_scheme_answers").select("*").eq("id",data.marking_scheme_answer_id).maybeSingle();
+    if(answer.error)throw answer.error;
+    return isOfficialQuestionAnswer(answer.data,data.marking_scheme_link_status,data)?{...data,marking_scheme_answers:answer.data}:null;
   }
 
   async function getQuestionScreenshot(questionId:number) {

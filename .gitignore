@@ -1,6 +1,8 @@
 node_modules/
 supabase/.temp/
 **/supabase/.temp/
+.supabase-local/
+supabase/.branches/
 **/node_modules/
 
 dist/
@@ -20,6 +22,8 @@ out/
 *.tsbuildinfo
 
 coverage/
+tmp/
+temp/
 .turbo/
 .cache/
 

@@ -170,10 +170,14 @@ export interface AiSource {
   markingSchemeLinkStatus?:
     | "linked"
     | "partial"
+    | "linked_exact"
+    | "linked_partial"
     | "unlinked"
     | "needs_review"
+    | "general_guidance"
     | null;
   markingSchemeResourceId?: number | null;
+  markingSchemeStatus?: "linked"|"resource_missing"|"resource_exists_answer_missing"|"answer_extracted_not_linked"|"answer_not_extracted"|"needs_review"|"generic_guidance_only"|"invalid_link"|null;
   sourcePage?: number | null;
   resourceId?: number | null;
   resourceType?: string | null;
@@ -183,6 +187,7 @@ export interface AiSource {
   topic?: string | null;
   subtopic?: string | null;
   difficulty?: string | null;
+  questionType?: string | null;
   marks?: number | null;
   sourceFile?: string | null;
   reference: string;

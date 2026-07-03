@@ -10,6 +10,13 @@
     "test": "tsx --test src/**/*.test.ts",
     "generate:screenshots": "tsx src/scripts/generate-question-screenshots.ts",
     "audit:questions": "tsx src/scripts/audit-question-index.ts",
+    "eval:retrieval": "tsx src/scripts/ai-retrieval-eval.ts",
+    "eval:ai": "tsx src/scripts/ai-retrieval-eval.ts",
+    "eval:ai:coverage": "tsx src/scripts/ai-coverage-eval.ts",
+    "eval:ai:dynamic": "tsx src/scripts/ai-dynamic-eval.ts",
+    "eval:marking-links": "tsx src/scripts/marking-links-eval.ts",
+    "audit:marking-links": "tsx src/scripts/marking-links-eval.ts",
+    "repair:marking-links": "tsx src/scripts/repair-marking-links.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit"
