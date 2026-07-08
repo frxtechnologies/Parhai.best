@@ -1,6 +1,5 @@
-import { API_BASE_URL } from "@/api/client";
+import { API_BASE_URL, useIsAdmin } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
-import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { requireSupabase } from "@/lib/supabase";
 import { useEffect, useState } from "react";
@@ -12,7 +11,8 @@ type Stats = { tagged: number; untagged: number; review: number };
 type ReviewQuestion = { id:number; subject_id:number; question_number:string; topic:string; subtopic:string|null; needs_review:boolean; question_text:string };
 
 export default function TopicMapManager() {
-  const { user, isLoading } = useAuth();
+  const { isLoading } = useAuth();
+  const { isAdmin, isResolved } = useIsAdmin();
   const [mappings,setMappings]=useState<Mapping[]>([]),[topics,setTopics]=useState<TopicRow[]>([]);
   const [stats,setStats]=useState<Record<string,Stats>>({}),[selected,setSelected]=useState(""),[message,setMessage]=useState("");
   const [form,setForm]=useState({topic:"",subtopic:"",reference:"",keywords:""});
@@ -34,7 +34,7 @@ export default function TopicMapManager() {
     setStats(next);if(!selected&&maps[0])setSelected(maps[0].subject_code);
   }
   useEffect(()=>{void load().catch(e=>setMessage(e.message))},[]);
-  if(isLoading)return <AppLayout><div/></AppLayout>;if(!isAdminEmail(user?.email))return <Redirect to="/dashboard"/>;
+  if(isLoading||!isResolved)return <AppLayout><div/></AppLayout>;if(!isAdmin)return <Redirect to="/dashboard"/>;
   async function token(){return (await requireSupabase().auth.getSession()).data.session?.access_token??""}
   async function add(){const keywords=form.keywords.split(",").map(v=>v.trim().toLowerCase()).filter(Boolean);if(!selected||!form.topic||!keywords.length)return;const{error}=await requireSupabase().from("topic_maps").upsert({subject_code:selected,topic:form.topic,subtopic:form.subtopic,syllabus_reference:form.reference||null,keywords,status:"approved",source:"manual"},{onConflict:"subject_code,topic,subtopic"});if(error)throw error;setForm({topic:"",subtopic:"",reference:"",keywords:""});await load()}
   async function importCsv(file:File){const lines=(await file.text()).split(/\r?\n/).filter(Boolean);const rows=lines.slice(1).map(line=>{const [topic,subtopic,reference,keywords]=line.split(",");return{subject_code:selected,topic:topic?.trim(),subtopic:subtopic?.trim()??"",syllabus_reference:reference?.trim()||null,keywords:(keywords??"").split("|").map(v=>v.trim()).filter(Boolean),status:"draft",source:"csv"}}).filter(r=>r.topic&&r.keywords.length);const{error}=await requireSupabase().from("topic_maps").upsert(rows,{onConflict:"subject_code,topic,subtopic"});if(error)throw error;await load()}

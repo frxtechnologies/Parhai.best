@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/auth-context";
-import { isAdminEmail } from "@/config/admin";
+import { useIsAdmin } from "@/api/client";
 import { BrandLogo } from "@/components/brand-logo";
 import {
   LayoutDashboard,
@@ -18,6 +18,7 @@ import {
   FlaskConical,
   RefreshCw,
   Tags,
+  Users,
 } from "lucide-react";
 
 function cn(...classes: (string | boolean | undefined)[]) {
@@ -37,6 +38,7 @@ const NAV_ITEMS = [
 
 const ADMIN_ITEMS = [
   { label: "Admin Panel", href: "/admin", icon: ShieldCheck },
+  { label: "User Management", href: "/admin/users", icon: Users },
   { label: "Subjects & Resources", href: "/admin/resources", icon: BookOpen },
   { label: "Processing Jobs", href: "/admin/processing", icon: RefreshCw },
   { label: "Topic Map Manager", href: "/admin/topic-maps", icon: Tags },
@@ -48,7 +50,7 @@ const ADMIN_ITEMS = [
 export function Sidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
-  const isAdmin = isAdminEmail(user?.email);
+  const { isAdmin } = useIsAdmin();
 
   const NavLink = ({ item }: { item: typeof NAV_ITEMS[0] }) => (
     <Link

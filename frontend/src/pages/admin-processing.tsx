@@ -1,6 +1,5 @@
-import { API_BASE_URL, requestResourceProcessing } from "@/api/client";
+import { API_BASE_URL, requestResourceProcessing, useIsAdmin } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
-import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { requireSupabase } from "@/lib/supabase";
 import { Eye, RefreshCw } from "lucide-react";
@@ -55,7 +54,8 @@ type IndexedQuestion = {
 };
 
 export default function AdminProcessing() {
-  const { user, isLoading } = useAuth();
+  const { isLoading } = useAuth();
+  const { isAdmin, isResolved } = useIsAdmin();
   const [resources, setResources] = useState<Resource[]>([]);
   const [questions, setQuestions] = useState<Record<number, IndexedQuestion[]>>(
     {},
@@ -83,13 +83,13 @@ export default function AdminProcessing() {
   useEffect(() => {
     void load().catch((error) => setMessage(error.message));
   }, []);
-  if (isLoading)
+  if (isLoading || !isResolved)
     return (
       <AppLayout>
         <div />
       </AppLayout>
     );
-  if (!isAdminEmail(user?.email)) return <Redirect to="/dashboard" />;
+  if (!isAdmin) return <Redirect to="/dashboard" />;
 
   async function authHeader() {
     const { data } = await requireSupabase().auth.getSession();

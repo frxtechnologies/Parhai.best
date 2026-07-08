@@ -157,6 +157,16 @@ export interface OnboardInput {
   subjectIds: number[];
 }
 
+export interface AdminUser {
+  id: string;
+  email: string | null;
+  name: string | null;
+  level: string | null;
+  isAdmin: boolean;
+  createdAt: string;
+  lastSignInAt: string | null;
+}
+
 export type RevisionActivity = "learn" | "practice" | "review" | "mock_paper";
 export type RevisionPhase = "foundation" | "practice" | "final_review";
 export type PreparationLevel = "beginner" | "intermediate" | "advanced";

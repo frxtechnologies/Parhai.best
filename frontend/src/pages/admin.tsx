@@ -1,7 +1,6 @@
 import { AppLayout } from "@/components/layout/app-layout";
-import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
-import { API_BASE_URL, useDirectPdfUpload, useListNotes, useListPapers, useListSubjects } from "@/api/client";
+import { API_BASE_URL, useDirectPdfUpload, useIsAdmin, useListNotes, useListPapers, useListSubjects } from "@/api/client";
 import { requireSupabase } from "@/lib/supabase";
 import type { DirectPdfUploadInput } from "@/api/types";
 import { BookOpen, CheckCircle2, FileText, ShieldCheck, UploadCloud } from "lucide-react";
@@ -13,7 +12,8 @@ const sessions: DirectPdfUploadInput["session"][] = ["MAY_JUNE", "OCT_NOV", "FEB
 type ProcessingPaper = { id: number; title: string; year: number; session: string; paper_number: number; variant: number | null; ingestion_status: string; processing_error: string | null; raw_text: string | null; questions: Array<{ count: number }> };
 
 export default function Admin() {
-  const { user, isLoading } = useAuth();
+  const { isLoading } = useAuth();
+  const { isAdmin, isResolved } = useIsAdmin();
   const { data: subjects = [] } = useListSubjects();
   const { data: papers = [] } = useListPapers({});
   const { data: notes = [] } = useListNotes({});
@@ -58,8 +58,8 @@ export default function Admin() {
     finally { setProcessingId(null); }
   }
 
-  if (isLoading) return <AppLayout><></></AppLayout>;
-  if (!isAdminEmail(user?.email)) return <Redirect to="/dashboard" />;
+  if (isLoading || !isResolved) return <AppLayout><></></AppLayout>;
+  if (!isAdmin) return <Redirect to="/dashboard" />;
 
   function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((current) => ({ ...current, [key]: value }));

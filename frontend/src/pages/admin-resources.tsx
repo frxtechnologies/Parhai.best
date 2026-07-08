@@ -1,8 +1,7 @@
-import { API_BASE_URL, deleteResource, getResourceDeletionPreview, requestResourceProcessing, type ResourceDeletionPreview } from "@/api/client";
+import { API_BASE_URL, deleteResource, getResourceDeletionPreview, requestResourceProcessing, useIsAdmin, type ResourceDeletionPreview } from "@/api/client";
 import { AppLayout } from "@/components/layout/app-layout";
 import { BulkAutoImport } from "@/components/admin/bulk-auto-import";
 import { ResourceLibraryManager } from "@/components/admin/resource-library-manager";
-import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { requireSupabase } from "@/lib/supabase";
 import { useQueryClient } from "@tanstack/react-query";
@@ -93,7 +92,8 @@ function normalizeResourceType(value: string): ResourceType {
 }
 
 export default function AdminResources() {
-  const { user, isLoading } = useAuth();
+  const { isLoading } = useAuth();
+  const { isAdmin, isResolved } = useIsAdmin();
   const queryClient = useQueryClient();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
@@ -152,13 +152,13 @@ export default function AdminResources() {
     void load().catch((error) => setMessage(error.message));
   }, []);
 
-  if (isLoading)
+  if (isLoading || !isResolved)
     return (
       <AppLayout>
         <div />
       </AppLayout>
     );
-  if (!isAdminEmail(user?.email)) return <Redirect to="/dashboard" />;
+  if (!isAdmin) return <Redirect to="/dashboard" />;
 
   async function saveSubject(event: FormEvent) {
     event.preventDefault();

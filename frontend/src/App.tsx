@@ -22,6 +22,7 @@ import PaperTesting from "@/pages/paper-testing";
 import AiAssistantTesting from "@/pages/ai-assistant-testing";
 import AdminResources from "@/pages/admin-resources";
 import AdminProcessing from "@/pages/admin-processing";
+import AdminUsers from "@/pages/admin-users";
 import TopicMapManager from "@/pages/topic-map-manager";
 import NotFound from "@/pages/not-found";
 
@@ -53,6 +54,7 @@ function Router() {
       <Route path="/revision-planner" component={RevisionPlanner} />
       <Route path="/progress" component={Progress} />
       <Route path="/admin" component={Admin} />
+      <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/testing" component={PaperTesting} />
       <Route path="/admin/ai-testing" component={AiAssistantTesting} />
       <Route path="/admin/resources" component={AdminResources} />

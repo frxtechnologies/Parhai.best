@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isSupabaseConfigured, requireSupabase, supabase } from "@/lib/supabase";
 import type {
   ActivityItem,
+  AdminUser,
   AiAssistantRequest,
   AiAssistantResponse,
   AiMessage,
@@ -950,6 +951,63 @@ async function generateRevisionPlan(input: RevisionPlanInput): Promise<RevisionP
 export function useGenerateRevisionPlan() {
   return useMutation<RevisionPlan, Error, RevisionPlanInput>({
     mutationFn: generateRevisionPlan,
+  });
+}
+
+/**
+ * Authoritative-on-the-server admin check for UI gating. Reads the caller's own
+ * admin_users row (RLS permits reading only your own row), so the frontend no
+ * longer relies on a hardcoded email list that could drift from the database.
+ */
+export function useIsAdmin() {
+  const { data, isLoading, isFetched } = useQuery<boolean>({
+    queryKey: ["supabase", "is-admin"],
+    queryFn: async () => {
+      if (!isSupabaseConfigured) return false;
+      const client = requireSupabase();
+      const { data, error } = await client.from("admin_users").select("email").limit(1);
+      if (error) return false;
+      return (data?.length ?? 0) > 0;
+    },
+    staleTime: 5 * 60_000,
+  });
+  return { isAdmin: data ?? false, isResolved: isFetched, isLoading };
+}
+
+async function fetchAdminUsers(): Promise<AdminUser[]> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/users`, {
+    headers: { Authorization: `Bearer ${await resourceAdminToken()}` },
+    cache: "no-store",
+  });
+  const body = (await response.json()) as { users?: AdminUser[]; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Could not load users.");
+  return body.users ?? [];
+}
+
+export function useAdminUsers() {
+  return useQuery<AdminUser[]>({ queryKey: ["admin", "users"], queryFn: fetchAdminUsers });
+}
+
+export function useSetUserAdmin() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { email: string; makeAdmin: boolean }>({
+    mutationFn: async ({ email, makeAdmin }) => {
+      const token = await resourceAdminToken();
+      const url = makeAdmin
+        ? `${API_BASE_URL}/api/admin/admins`
+        : `${API_BASE_URL}/api/admin/admins/${encodeURIComponent(email)}`;
+      const response = await fetch(url, {
+        method: makeAdmin ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: makeAdmin ? JSON.stringify({ email }) : undefined,
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Could not update admin access.");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["supabase", "is-admin"] });
+    },
   });
 }
 
