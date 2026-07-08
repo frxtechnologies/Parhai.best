@@ -222,6 +222,49 @@ async function getCurrentUserId() {
   return data.user.id;
 }
 
+/** Canonical study-event types logged to the `study_events` table for analytics. */
+export const STUDY_EVENT = {
+  AI_QUESTION: "ai_question",
+  QUESTION_PRACTICED: "question_practiced",
+  QUESTION_SAVED: "question_saved",
+  PAPER_VIEWED: "paper_viewed",
+  NOTE_VIEWED: "note_viewed",
+} as const;
+export type StudyEventType = (typeof STUDY_EVENT)[keyof typeof STUDY_EVENT];
+
+type StudyEventRow = {
+  id: number;
+  subject_id: number | null;
+  event_type: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+/**
+ * Record a learning action for dashboard analytics. Best-effort by design: an
+ * analytics write must never break or block the student's primary action, so
+ * failures (offline, RLS, misconfiguration) are swallowed silently.
+ */
+export async function logStudyEvent(
+  eventType: StudyEventType,
+  subjectId?: number | null,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  try {
+    const client = requireSupabase();
+    const userId = await getCurrentUserId();
+    await client.from("study_events").insert({
+      user_id: userId,
+      subject_id: subjectId ?? null,
+      event_type: eventType,
+      metadata,
+    });
+  } catch {
+    // Intentionally ignored — analytics failures should be invisible to the student.
+  }
+}
+
 function mapSubject(row: SubjectRow, counts?: { papers?: number; notes?: number; questions?: number }): Subject {
   return {
     id: row.id,
@@ -564,33 +607,179 @@ async function getUserProfile(): Promise<UserProfile> {
   };
 }
 
+// Dashboard analytics are derived from the append-only `study_events` log.
+const STUDY_SESSION_GAP_MS = 30 * 60 * 1000; // events >30min apart begin a new study session
+const MIN_SESSION_MINUTES = 2; // floor so a single quick action still counts as a little study time
+const PRACTICE_EVENT_TYPES = new Set<string>([STUDY_EVENT.AI_QUESTION, STUDY_EVENT.QUESTION_PRACTICED]);
+
+async function getStudyEvents(): Promise<StudyEventRow[]> {
+  if (!isSupabaseConfigured) return [];
+  const client = requireSupabase();
+  const userId = await getCurrentUserId();
+  const { data, error } = await client
+    .from("study_events")
+    .select("id,subject_id,event_type,metadata,created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (error) throw error;
+  return (data ?? []) as unknown as StudyEventRow[];
+}
+
+/**
+ * Estimate active study minutes from event timestamps using gap-based
+ * sessionization: consecutive events within STUDY_SESSION_GAP_MS belong to one
+ * session, and each session contributes at least MIN_SESSION_MINUTES. This is a
+ * real, conservative estimate of time-on-platform rather than a fabricated figure.
+ */
+function estimateSessionMinutes(timestamps: number[]): number {
+  if (timestamps.length === 0) return 0;
+  const sorted = [...timestamps].sort((a, b) => a - b);
+  let total = 0;
+  let sessionStart = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (sorted[i] - prev > STUDY_SESSION_GAP_MS) {
+      total += Math.max((prev - sessionStart) / 60_000, MIN_SESSION_MINUTES);
+      sessionStart = sorted[i];
+    }
+    prev = sorted[i];
+  }
+  total += Math.max((prev - sessionStart) / 60_000, MIN_SESSION_MINUTES);
+  return total;
+}
+
+/** Count consecutive days (ending today or yesterday) that have at least one event. */
+function computeStreakDays(isoDates: string[]): number {
+  if (isoDates.length === 0) return 0;
+  const days = new Set(isoDates.map((value) => value.slice(0, 10)));
+  const cursor = new Date();
+  const key = () => cursor.toISOString().slice(0, 10);
+  if (!days.has(key())) {
+    cursor.setDate(cursor.getDate() - 1);
+    if (!days.has(key())) return 0; // no activity today or yesterday — streak is broken
+  }
+  let streak = 0;
+  while (days.has(key())) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+function truncateText(text: string, max: number): string {
+  const clean = text.trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
+function describeStudyEvent(event: StudyEventRow): string {
+  switch (event.event_type) {
+    case STUDY_EVENT.AI_QUESTION: {
+      const question = typeof event.metadata?.question === "string" ? event.metadata.question : "";
+      return question ? `Asked the AI tutor: “${truncateText(question, 80)}”` : "Asked the AI tutor a question";
+    }
+    case STUDY_EVENT.QUESTION_PRACTICED:
+      return "Practised a past-paper question";
+    case STUDY_EVENT.QUESTION_SAVED:
+      return "Saved a question for later";
+    case STUDY_EVENT.PAPER_VIEWED:
+      return "Opened a past paper";
+    case STUDY_EVENT.NOTE_VIEWED:
+      return "Reviewed revision notes";
+    default:
+      return "Study activity";
+  }
+}
+
 async function getDashboard(): Promise<Dashboard> {
   const user = await getUserProfile();
   const allSubjects = await listSubjects();
   const selectedSubjects = allSubjects.filter((subject) => user.subjectIds.includes(subject.id));
+  const subjectById = new Map(selectedSubjects.map((subject) => [subject.id, subject]));
 
-  const subjectProgress: SubjectProgress[] = selectedSubjects.map((subject) => ({
-    subjectId: subject.id,
-    subjectName: subject.name,
-    subjectColor: subject.color,
-    questionsAttempted: 0,
-    questionsCorrect: 0,
-    papersCompleted: subject.totalPapers,
-    notesRead: 0,
-    hoursStudied: 0,
-    percentComplete: 0,
-    lastStudied: null,
-  }));
+  const events = await getStudyEvents();
+
+  const perSubjectTimestamps = new Map<number, number[]>();
+  const perSubjectPractice = new Map<number, number>();
+  const perSubjectCorrect = new Map<number, number>();
+  const perSubjectNotes = new Map<number, Set<string>>();
+  const perSubjectLastStudied = new Map<number, string>();
+  const allTimestamps: number[] = [];
+  let totalAttempted = 0;
+  let totalCorrect = 0;
+
+  // Events arrive newest-first, so the first one seen per subject is the latest.
+  for (const event of events) {
+    const timestamp = new Date(event.created_at).getTime();
+    allTimestamps.push(timestamp);
+    const subjectId = event.subject_id;
+    if (subjectId != null) {
+      const list = perSubjectTimestamps.get(subjectId) ?? [];
+      list.push(timestamp);
+      perSubjectTimestamps.set(subjectId, list);
+      if (!perSubjectLastStudied.has(subjectId)) perSubjectLastStudied.set(subjectId, event.created_at);
+    }
+    if (PRACTICE_EVENT_TYPES.has(event.event_type)) {
+      totalAttempted += 1;
+      if (subjectId != null) perSubjectPractice.set(subjectId, (perSubjectPractice.get(subjectId) ?? 0) + 1);
+      if (event.metadata?.correct === true) {
+        totalCorrect += 1;
+        if (subjectId != null) perSubjectCorrect.set(subjectId, (perSubjectCorrect.get(subjectId) ?? 0) + 1);
+      }
+    }
+    if (event.event_type === STUDY_EVENT.NOTE_VIEWED && subjectId != null) {
+      const noteKey = String(event.metadata?.noteId ?? event.id);
+      const set = perSubjectNotes.get(subjectId) ?? new Set<string>();
+      set.add(noteKey);
+      perSubjectNotes.set(subjectId, set);
+    }
+  }
+
+  const subjectProgress: SubjectProgress[] = selectedSubjects.map((subject) => {
+    const attempted = perSubjectPractice.get(subject.id) ?? 0;
+    const hoursStudied = Math.round((estimateSessionMinutes(perSubjectTimestamps.get(subject.id) ?? []) / 60) * 10) / 10;
+    // Progress = share of the subject's question bank the student has engaged with.
+    const percentComplete = subject.totalQuestions > 0
+      ? Math.min(100, Math.round((attempted / subject.totalQuestions) * 100))
+      : 0;
+    return {
+      subjectId: subject.id,
+      subjectName: subject.name,
+      subjectColor: subject.color,
+      questionsAttempted: attempted,
+      questionsCorrect: perSubjectCorrect.get(subject.id) ?? 0,
+      papersCompleted: 0,
+      notesRead: perSubjectNotes.get(subject.id)?.size ?? 0,
+      hoursStudied,
+      percentComplete,
+      lastStudied: perSubjectLastStudied.get(subject.id) ?? null,
+    };
+  });
+
+  const recentActivity: ActivityItem[] = events.slice(0, 15).map((event) => {
+    const subject = event.subject_id != null ? subjectById.get(event.subject_id) : undefined;
+    return {
+      id: event.id,
+      type: event.event_type,
+      subjectId: event.subject_id ?? 0,
+      subjectName: subject?.name ?? "General",
+      subjectColor: subject?.color ?? "#0B1F3A",
+      description: describeStudyEvent(event),
+      createdAt: event.created_at,
+    };
+  });
+
+  const streakDays = computeStreakDays(events.map((event) => event.created_at));
 
   return {
     user,
-    streakDays: user.streakDays,
-    totalHoursStudied: 0,
+    streakDays: streakDays || user.streakDays,
+    totalHoursStudied: Math.round((estimateSessionMinutes(allTimestamps) / 60) * 10) / 10,
     subjectsEnrolled: selectedSubjects.length,
-    questionsAttempted: 0,
-    overallScore: 0,
+    questionsAttempted: totalAttempted,
+    overallScore: totalAttempted > 0 ? Math.round((totalCorrect / totalAttempted) * 100) : 0,
     subjectProgress,
-    recentActivity: [] as ActivityItem[],
+    recentActivity,
     upcomingExams: [] as Exam[],
   };
 }
@@ -732,6 +921,11 @@ export function useSendAiMessage() {
     mutationFn: sendAiAssistantMessage,
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["supabase", "ai-messages", variables.subjectId] });
+      // Record the interaction for dashboard analytics, then refresh the dashboard
+      // so recent activity and study time reflect it immediately.
+      void logStudyEvent(STUDY_EVENT.AI_QUESTION, variables.subjectId, { question: variables.message }).then(() => {
+        queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
+      });
     },
   });
 }
