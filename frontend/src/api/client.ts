@@ -16,6 +16,8 @@ import type {
   ListSubjectsParams,
   Note,
   OnboardInput,
+  GeneratedNotes,
+  NoteType,
   Paper,
   Question,
   RevisionPlan,
@@ -973,6 +975,28 @@ async function solveQuestion(input: { files: File[]; subjectId?: number | null }
   const body = (await response.json()) as SolvedQuestion & { error?: string };
   if (!response.ok) throw new Error(body.error ?? "Could not solve the question.");
   return body;
+}
+
+async function generateNotes(input: { subjectId: number; topic: string; noteType: NoteType }): Promise<GeneratedNotes> {
+  const client = requireSupabase();
+  const { data: sessionData } = await client.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) throw new Error("Please sign in again to generate notes.");
+
+  const response = await fetch(`${API_BASE_URL}/api/generate-notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as GeneratedNotes & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Could not generate notes.");
+  return body;
+}
+
+export function useGenerateNotes() {
+  return useMutation<GeneratedNotes, Error, { subjectId: number; topic: string; noteType: NoteType }>({
+    mutationFn: generateNotes,
+  });
 }
 
 export function useSolveQuestion() {

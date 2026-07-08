@@ -8,6 +8,7 @@ import topicMapsRouter from "./topic-maps";
 import revisionPlannerRouter from "./revision-planner";
 import adminUsersRouter from "./admin-users";
 import questionSolverRouter from "./question-solver";
+import notesGeneratorRouter from "./notes-generator";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(topicMapsRouter);
 router.use(revisionPlannerRouter);
 router.use(adminUsersRouter);
 router.use(questionSolverRouter);
+router.use(notesGeneratorRouter);
 
 export default router;

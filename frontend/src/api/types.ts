@@ -157,6 +157,26 @@ export interface OnboardInput {
   subjectIds: number[];
 }
 
+export type NoteType =
+  | "summary"
+  | "detailed"
+  | "flashcards"
+  | "definitions"
+  | "formula_sheet"
+  | "checklist"
+  | "mind_map"
+  | "memory_tricks"
+  | "last_minute";
+
+export interface GeneratedNotes {
+  subject: { id: number; name: string; code: string };
+  topic: string;
+  noteType: NoteType;
+  markdown: string;
+  grounded: boolean;
+  sources: Array<{ index: number; type: string; reference: string }>;
+}
+
 export interface ExtractedQuestion {
   questionText: string;
   subjectGuess: string | null;

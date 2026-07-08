@@ -12,6 +12,7 @@ import {
   LineChart,
   CalendarClock,
   ScanText,
+  Sparkles,
   LogOut,
   Flame,
   Menu,
@@ -34,6 +35,7 @@ const NAV_ITEMS = [
   { label: "Questions", href: "/questions", icon: HelpCircle },
   { label: "AI Tutor", href: "/ai", icon: Bot },
   { label: "Question Solver", href: "/question-solver", icon: ScanText },
+  { label: "Notes Generator", href: "/notes-generator", icon: Sparkles },
   { label: "Revision Planner", href: "/revision-planner", icon: CalendarClock },
   { label: "Progress", href: "/progress", icon: LineChart },
 ];
