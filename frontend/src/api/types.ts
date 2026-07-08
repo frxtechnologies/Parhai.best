@@ -157,6 +157,48 @@ export interface OnboardInput {
   subjectIds: number[];
 }
 
+export type RevisionActivity = "learn" | "practice" | "review" | "mock_paper";
+export type RevisionPhase = "foundation" | "practice" | "final_review";
+export type PreparationLevel = "beginner" | "intermediate" | "advanced";
+
+export interface RevisionPlanInput {
+  examDate: string;
+  subjects: string[];
+  weakTopics?: string[];
+  hoursPerDay?: number;
+  studyDaysPerWeek?: number;
+  preparationLevel?: PreparationLevel;
+  includeGuidance?: boolean;
+}
+
+export interface RevisionSession {
+  subject: string;
+  focus: string;
+  activity: RevisionActivity;
+  minutes: number;
+}
+
+export interface RevisionDay {
+  date: string;
+  label: string;
+  phase: RevisionPhase;
+  isRestDay: boolean;
+  sessions: RevisionSession[];
+  totalMinutes: number;
+}
+
+export interface RevisionPlan {
+  examDate: string;
+  daysUntilExam: number;
+  totalDays: number;
+  studyDays: number;
+  subjects: string[];
+  weakTopics: string[];
+  days: RevisionDay[];
+  summary: string;
+  aiGuidance?: string;
+}
+
 export interface ListSubjectsParams {
   level?: "O_LEVEL" | "A_LEVEL";
 }

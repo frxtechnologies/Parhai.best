@@ -17,6 +17,8 @@ import type {
   OnboardInput,
   Paper,
   Question,
+  RevisionPlan,
+  RevisionPlanInput,
   Subject,
   SubjectProgress,
   UserProfile,
@@ -926,6 +928,28 @@ export function useOnboardUser() {
       queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
       queryClient.invalidateQueries({ queryKey: ["supabase", "subjects"] });
     },
+  });
+}
+
+async function generateRevisionPlan(input: RevisionPlanInput): Promise<RevisionPlan> {
+  const client = requireSupabase();
+  const { data: sessionData } = await client.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) throw new Error("Please sign in again to build a revision plan.");
+
+  const response = await fetch(`${API_BASE_URL}/api/revision-plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as RevisionPlan & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Could not build a revision plan.");
+  return body;
+}
+
+export function useGenerateRevisionPlan() {
+  return useMutation<RevisionPlan, Error, RevisionPlanInput>({
+    mutationFn: generateRevisionPlan,
   });
 }
 

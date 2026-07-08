@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Bot,
   LineChart,
+  CalendarClock,
   LogOut,
   Flame,
   Menu,
@@ -30,6 +31,7 @@ const NAV_ITEMS = [
   { label: "Notes", href: "/notes", icon: FilePenLine },
   { label: "Questions", href: "/questions", icon: HelpCircle },
   { label: "AI Tutor", href: "/ai", icon: Bot },
+  { label: "Revision Planner", href: "/revision-planner", icon: CalendarClock },
   { label: "Progress", href: "/progress", icon: LineChart },
 ];
 
