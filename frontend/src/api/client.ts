@@ -206,6 +206,20 @@ export async function signUpWithPassword(email: string, password: string) {
   return data;
 }
 
+export async function signInWithGoogle() {
+  const client = requireSupabase();
+  const { data, error } = await client.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      // Return to the dashboard; supabase-js (detectSessionInUrl) exchanges the
+      // OAuth code for a session automatically on the redirected page.
+      redirectTo: `${window.location.origin}/dashboard`,
+    },
+  });
+  if (error) throw error;
+  return data;
+}
+
 export async function signOut() {
   clearStoredUser();
   if (supabase) {
