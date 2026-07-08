@@ -20,6 +20,7 @@ import type {
   Question,
   RevisionPlan,
   RevisionPlanInput,
+  SolvedQuestion,
   Subject,
   SubjectProgress,
   UserProfile,
@@ -951,6 +952,42 @@ async function generateRevisionPlan(input: RevisionPlanInput): Promise<RevisionP
 export function useGenerateRevisionPlan() {
   return useMutation<RevisionPlan, Error, RevisionPlanInput>({
     mutationFn: generateRevisionPlan,
+  });
+}
+
+async function solveQuestion(input: { files: File[]; subjectId?: number | null }): Promise<SolvedQuestion> {
+  const client = requireSupabase();
+  const { data: sessionData } = await client.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) throw new Error("Please sign in again to use the question solver.");
+
+  const form = new FormData();
+  for (const file of input.files) form.append("images", file);
+  if (input.subjectId) form.append("subjectId", String(input.subjectId));
+
+  const response = await fetch(`${API_BASE_URL}/api/solve-question`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form,
+  });
+  const body = (await response.json()) as SolvedQuestion & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Could not solve the question.");
+  return body;
+}
+
+export function useSolveQuestion() {
+  const queryClient = useQueryClient();
+  return useMutation<SolvedQuestion, Error, { files: File[]; subjectId?: number | null }>({
+    mutationFn: solveQuestion,
+    onSuccess: (result, variables) => {
+      // Log a study event for a successful solve (not a retake prompt).
+      if (!result.needsRetake) {
+        void logStudyEvent(STUDY_EVENT.QUESTION_PRACTICED, variables.subjectId ?? result.matchedSubject?.id ?? null, {
+          via: "question_solver",
+          topic: result.extraction.topic,
+        }).then(() => queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() }));
+      }
+    },
   });
 }
 

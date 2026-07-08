@@ -109,6 +109,99 @@ export async function generateAiAnswer(systemInstruction: string, prompt: string
   return getAiProvider() === "gemini" ? geminiChat(systemInstruction, prompt) : compatibleChat(systemInstruction, prompt);
 }
 
+/** A single image or document to send to a vision model. `data` is base64 (no data: prefix). */
+export type VisionInput = { data: string; mimeType: string };
+
+// Model names that indicate multimodal (image) capability for non-Gemini/OpenAI providers.
+const VISION_CAPABLE_MODEL = /gpt-4|gpt-4o|gpt-4\.1|o1|o3|o4|gemini|vision|scout|maverick|grok.*vision|llava|pixtral|qwen.*vl/i;
+
+/**
+ * Whether the configured provider/model can read images. Gemini and OpenAI
+ * defaults are multimodal; other providers must be pointed at a vision model.
+ */
+export function getVisionConfigurationError() {
+  const configError = getAiConfigurationError();
+  if (configError) return configError;
+  const selected = getAiProvider();
+  if (selected === "gemini" || selected === "openai") return null;
+  if (VISION_CAPABLE_MODEL.test(providerConfig[selected].model)) return null;
+  return `Image reading needs a vision-capable model. Set AI_PROVIDER=gemini (recommended) or configure a vision model for ${selected}.`;
+}
+
+export function isVisionConfigured() {
+  return getVisionConfigurationError() === null;
+}
+
+/** Only Gemini accepts PDFs directly; other providers require rasterised images. */
+export function providerSupportsPdf() {
+  return getAiProvider() === "gemini";
+}
+
+async function geminiVision(systemInstruction: string, prompt: string, images: VisionInput[], jsonMode: boolean) {
+  const config = requireConfig();
+  const parts = [
+    { text: prompt },
+    ...images.map((image) => ({ inline_data: { mime_type: image.mimeType, data: image.data } })),
+  ];
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": config.key },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemInstruction }] },
+      contents: [{ role: "user", parts }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 8192, ...(jsonMode ? { responseMimeType: "application/json" } : {}) },
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  const body = await response.json() as { error?: { message?: string }; candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  if (!response.ok) throw await providerError(response, body, "Vision request");
+  const answer = body.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
+  if (!answer) throw new Error("The vision model returned an empty response.");
+  return answer;
+}
+
+async function compatibleVision(systemInstruction: string, prompt: string, images: VisionInput[], jsonMode: boolean) {
+  const config = requireConfig();
+  const content = [
+    { type: "text", text: prompt },
+    ...images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mimeType};base64,${image.data}` } })),
+  ];
+  const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.key}`,
+      "Content-Type": "application/json",
+      ...(provider === "openrouter" ? { "HTTP-Referer": "https://parhais.netlify.app", "X-Title": "Parhai.com" } : {}),
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [{ role: "system", content: systemInstruction }, { role: "user", content }],
+      temperature: 0.1,
+      max_tokens: 4096,
+      ...(jsonMode && ["openai", "groq"].includes(provider) ? { response_format: { type: "json_object" } } : {}),
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  const body = await response.json() as { error?: { message?: string }; choices?: Array<{ message?: { content?: string } }> };
+  if (!response.ok) throw await providerError(response, body, "Vision request");
+  const answer = body.choices?.[0]?.message?.content?.trim();
+  if (!answer) throw new Error("The vision model returned an empty response.");
+  return answer;
+}
+
+/**
+ * Send one or more images (or, for Gemini, PDFs) to a vision model with a text
+ * prompt. Used for OCR and visual understanding of uploaded question/answer sheets.
+ */
+export async function analyzeImages(systemInstruction: string, prompt: string, images: VisionInput[], jsonMode = false): Promise<string> {
+  const error = getVisionConfigurationError();
+  if (error) throw new Error(error);
+  if (images.length === 0) throw new Error("No image was provided to analyse.");
+  return getAiProvider() === "gemini"
+    ? geminiVision(systemInstruction, prompt, images, jsonMode)
+    : compatibleVision(systemInstruction, prompt, images, jsonMode);
+}
+
 function wait(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

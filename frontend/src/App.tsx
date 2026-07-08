@@ -13,6 +13,7 @@ import Papers from "@/pages/papers";
 import Notes from "@/pages/notes";
 import Questions from "@/pages/questions";
 import AiTutor from "@/pages/ai-tutor";
+import QuestionSolver from "@/pages/question-solver";
 import RevisionPlanner from "@/pages/revision-planner";
 import Progress from "@/pages/progress";
 import Admin from "@/pages/admin";
@@ -51,6 +52,7 @@ function Router() {
       <Route path="/notes" component={Notes} />
       <Route path="/questions" component={Questions} />
       <Route path="/ai" component={AiTutor} />
+      <Route path="/question-solver" component={QuestionSolver} />
       <Route path="/revision-planner" component={RevisionPlanner} />
       <Route path="/progress" component={Progress} />
       <Route path="/admin" component={Admin} />

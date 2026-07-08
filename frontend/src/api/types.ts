@@ -157,6 +157,30 @@ export interface OnboardInput {
   subjectIds: number[];
 }
 
+export interface ExtractedQuestion {
+  questionText: string;
+  subjectGuess: string | null;
+  paper: string | null;
+  session: string | null;
+  variant: string | null;
+  questionNumber: string | null;
+  marks: number | null;
+  topic: string | null;
+  subtopic: string | null;
+  hasEquations: boolean;
+  hasDiagram: boolean;
+  confidence: number;
+}
+
+export interface SolvedQuestion {
+  needsRetake: boolean;
+  extraction: ExtractedQuestion;
+  answer?: string;
+  sources?: Array<{ index: number; type: string; reference: string }>;
+  matchedSubject?: { id: number; name: string; code: string } | null;
+  usedGroundedSources?: boolean;
+}
+
 export interface AdminUser {
   id: string;
   email: string | null;
