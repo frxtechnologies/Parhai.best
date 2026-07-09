@@ -39,6 +39,23 @@ test("ranks substantial questions above one-mark questions for hardest requests"
   assert.equal(ranked[0]!.reference, "Q6");
 });
 
+test("F19: a topic-filtered semantic question outranks a lexical-heavy off-target hit", () => {
+  const terms = expandSearchTerms("motion speed distance graph");
+  const ranked = rankEvidence([
+    { reference: "Lexical", content: "motion speed distance graph appear here", metadata: { topic: "Motion", questionNumber: "2" } },
+    { reference: "Semantic", content: "A cyclist accelerates from rest.", metadata: { similarity: 0.9, taxonomyTopicId: "phys.motion.kinematics", topic: "Motion", questionNumber: "5" } },
+  ], terms);
+  assert.equal(ranked[0]!.reference, "Semantic");
+});
+
+test("F19: off-topic high-similarity content still loses to an on-topic match (precision preserved)", () => {
+  const ranked = rankEvidence([
+    { reference: "OffTopic", content: "gas pressure rises", metadata: { similarity: 0.95, topic: "Thermal Physics" } },
+    { reference: "OnTopic", content: "calculate the circuit current", metadata: { similarity: 0.3, topic: "Electricity", questionNumber: "7" } },
+  ], expandSearchTerms("electricity circuit current"));
+  assert.equal(ranked[0]!.reference, "OnTopic");
+});
+
 test("result wording never displays more questions than remain after deduplication", () => {
   assert.equal(formatQuestionResultSummary(5, 1, 6), "Found 5 possible matches. Removed 1 repeated/similar question. Showing the 4 best results.");
 });

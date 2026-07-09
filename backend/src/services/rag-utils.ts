@@ -127,14 +127,23 @@ export function rankEvidence<T extends RankableSource>(sources: T[], terms: stri
     const subtopic = String(source.metadata.subtopic ?? "").toLowerCase();
     const content = source.content.toLowerCase();
     const reference = source.reference.toLowerCase();
-    let score = Number(source.metadata.similarity ?? 0) * 6;
+    // F19 hybrid reranker: bound the lexical contribution so keyword-stuffing cannot
+    // swamp a strong semantic+topic hit, then blend it with an elevated semantic
+    // signal. Lexical still wins when a high-similarity item is off-topic (it earns
+    // no lexical/topic credit) — preserving retrieval precision.
+    let lexical = 0;
     for (const term of terms) {
-      if (topic === term) score += 12;
-      else if (topic.includes(term)) score += 8;
-      if (subtopic.includes(term)) score += 6;
-      if (content.includes(term)) score += 3;
-      if (reference.includes(term)) score += 2;
+      if (topic === term) lexical += 12;
+      else if (topic.includes(term)) lexical += 8;
+      if (subtopic.includes(term)) lexical += 6;
+      if (content.includes(term)) lexical += 3;
+      if (reference.includes(term)) lexical += 2;
     }
+    lexical = Math.min(lexical, 30);
+    let score = Number(source.metadata.similarity ?? 0) * 10 + lexical;
+    // Reward passing the taxonomy topic filter (F18): these hits are on-topic by
+    // construction, so a paraphrased semantic match still surfaces without lexical overlap.
+    if (source.metadata.taxonomyTopicId) score += 8;
     if (source.metadata.questionNumber) score += 1;
     if (hardestIntent && source.metadata.questionNumber) {
       const marks = Number(source.metadata.marks ?? 0);
