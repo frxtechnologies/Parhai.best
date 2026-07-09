@@ -21,6 +21,8 @@ export type RetrievalTelemetry = {
   answerLength: string;
   providerOk: boolean;
   latencyMs: number;
+  legacySourcesReturned: number;
+  legacySourcesCited: number;
 };
 
 /**
@@ -49,6 +51,8 @@ export async function logRetrievalTelemetry(
         answer_length: t.answerLength,
         provider_ok: t.providerOk,
         latency_ms: t.latencyMs,
+        legacy_sources_returned: t.legacySourcesReturned,
+        legacy_sources_cited: t.legacySourcesCited,
       })
       .select("id")
       .single();

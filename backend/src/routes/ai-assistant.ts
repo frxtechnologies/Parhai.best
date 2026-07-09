@@ -15,6 +15,12 @@ const router: IRouter = Router();
 const MISSING_SOURCE_MESSAGE = "I could not find this in the uploaded papers yet.";
 const UNPROCESSED_PAPER_MESSAGE = "This paper is uploaded but not processed yet. Please process it first.";
 
+// Phase 1 (F1): kill switch for the legacy Gen-2 retrieval path. Default ON so
+// behaviour is unchanged while telemetry measures whether legacy sources ever win
+// a citation. Set ENABLE_LEGACY_RETRIEVAL=false to disable once data proves it dead.
+const LEGACY_RETRIEVAL_ENABLED = process.env.ENABLE_LEGACY_RETRIEVAL !== "false";
+const EMPTY_LEGACY_RETRIEVAL = { sources: [] as SourceResult[], matchedPapers: [] as any[], matchedQuestions: [] as any[], extractedQuestionCount: 0 };
+
 const RequestBody = z.object({
   message: z.string().trim().min(1).max(4000),
   subjectId: z.coerce.number().int().positive(),
@@ -334,8 +340,11 @@ router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<v
 
     const [resourceRetrieval, legacyRetrieval] = await Promise.all([
       retrieveResourceSources(client, input, subject),
-      retrieveSources(client, input, subject),
+      LEGACY_RETRIEVAL_ENABLED ? retrieveSources(client, input, subject) : Promise.resolve(EMPTY_LEGACY_RETRIEVAL),
     ]);
+    // Tag legacy-origin sources so telemetry can measure whether they ever win a citation (F1).
+    for (const source of legacyRetrieval.sources) source.metadata.__origin = "legacy";
+    const legacySourcesReturned = legacyRetrieval.sources.length;
     const diagnostics: Record<string, unknown> = {
       matchedResources: resourceRetrieval.resources,
       matchedChunks: resourceRetrieval.sources.length,
@@ -360,7 +369,7 @@ router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<v
       ? rankedRetrieved.filter((source) => source.sourceType === "question").slice(0, 6)
       : rankedRetrieved;
     // Best-effort retrieval telemetry (never blocks or breaks the response).
-    const recordTelemetry = (providerOk: boolean, sourceCount: number, questionCount: number) =>
+    const recordTelemetry = (providerOk: boolean, sourceCount: number, questionCount: number, legacyCited = 0) =>
       void logRetrievalTelemetry(client, {
         userId: res.locals.user.id,
         subjectId: subject.id,
@@ -376,6 +385,8 @@ router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<v
         answerLength: input.answerLength,
         providerOk,
         latencyMs: Date.now() - startedAt,
+        legacySourcesReturned,
+        legacySourcesCited: legacyCited,
       });
     const onlyUnprocessedResources = resourceRetrieval.resources.length > 0 && resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
     const onlyUnprocessedPapers = legacyRetrieval.matchedPapers.length > 0 && legacyRetrieval.extractedQuestionCount === 0;
@@ -467,6 +478,8 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       ? finalizeGroundedAnswer(answer, retrieved.length, MISSING_SOURCE_MESSAGE)
       : finalizeTeacherAnswer(answer, retrieved.length, mode);
     const cited = new Set(grounded.citedIndexes);
+    // Measure whether the legacy Gen-2 path actually won any citation (F1).
+    const legacyCited = retrieved.filter((source, index) => cited.has(index + 1) && source.metadata.__origin === "legacy").length;
     const sources = retrieved.flatMap((source, index) => (cited.has(index + 1) || (questionListRequest && source.sourceType === "question")) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, resourceId: source.metadata.resourceId ?? null, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, variant: source.metadata.variant ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null, topic: source.metadata.topic ?? null, subtopic: source.metadata.subtopic ?? null, confidence: source.metadata.confidence ?? null, needsReview: source.metadata.needsReview ?? null, difficulty: source.metadata.difficulty ?? null, marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
     const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: grounded.answer, sources }]);
     if (historyError) throw historyError;
@@ -478,7 +491,7 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       ? formatQuestionResultSummary(resourceRetrieval.indexedQuestionCount, resourceRetrieval.duplicatesRemoved, displayedQuestions)
       : "";
     const presentedAnswer = questionListRequest ? questionSearchAnswer(subject, retrieved, input.message) : grounded.answer;
-    recordTelemetry(true, sources.length, displayedQuestions);
+    recordTelemetry(true, sources.length, displayedQuestions, legacyCited);
     res.json({ answer: [resultSummary, presentedAnswer].filter(Boolean).join("\n\n"), sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
     req.log.error({ error }, "AI assistant request failed");
