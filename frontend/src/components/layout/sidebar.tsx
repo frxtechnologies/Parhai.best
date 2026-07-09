@@ -29,28 +29,28 @@ function cn(...classes: (string | boolean | undefined)[]) {
 }
 
 const NAV_ITEMS = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Subjects", href: "/subjects", icon: BookOpen },
-  { label: "Papers", href: "/papers", icon: FileText },
-  { label: "Notes", href: "/notes", icon: FilePenLine },
-  { label: "Questions", href: "/questions", icon: HelpCircle },
-  { label: "AI Tutor", href: "/ai", icon: Bot },
+  { label: "Dashboard",       href: "/dashboard",       icon: LayoutDashboard },
+  { label: "Subjects",        href: "/subjects",        icon: BookOpen },
+  { label: "Papers",          href: "/papers",          icon: FileText },
+  { label: "Notes",           href: "/notes",           icon: FilePenLine },
+  { label: "Questions",       href: "/questions",       icon: HelpCircle },
+  { label: "AI Tutor",        href: "/ai",              icon: Bot },
   { label: "Question Solver", href: "/question-solver", icon: ScanText },
   { label: "Notes Generator", href: "/notes-generator", icon: Sparkles },
-  { label: "Paper Checker", href: "/paper-checker", icon: ClipboardCheck },
-  { label: "Revision Planner", href: "/revision-planner", icon: CalendarClock },
-  { label: "Progress", href: "/progress", icon: LineChart },
+  { label: "Paper Checker",   href: "/paper-checker",   icon: ClipboardCheck },
+  { label: "Revision Planner",href: "/revision-planner",icon: CalendarClock },
+  { label: "Progress",        href: "/progress",        icon: LineChart },
 ];
 
 const ADMIN_ITEMS = [
-  { label: "Admin Panel", href: "/admin", icon: ShieldCheck },
-  { label: "User Management", href: "/admin/users", icon: Users },
-  { label: "Subjects & Resources", href: "/admin/resources", icon: BookOpen },
-  { label: "Processing Jobs", href: "/admin/processing", icon: RefreshCw },
-  { label: "Topic Map Manager", href: "/admin/topic-maps", icon: Tags },
-  { label: "Pipeline Testing", href: "/admin/testing", icon: FlaskConical },
-  { label: "AI Testing", href: "/admin/ai-testing", icon: Bot },
-  { label: "Paper Analytics", href: "/analytics/papers", icon: LineChart },
+  { label: "Admin Panel",          href: "/admin",               icon: ShieldCheck },
+  { label: "User Management",      href: "/admin/users",         icon: Users },
+  { label: "Subjects & Resources", href: "/admin/resources",     icon: BookOpen },
+  { label: "Processing Jobs",      href: "/admin/processing",    icon: RefreshCw },
+  { label: "Topic Map Manager",    href: "/admin/topic-maps",    icon: Tags },
+  { label: "Pipeline Testing",     href: "/admin/testing",       icon: FlaskConical },
+  { label: "AI Testing",           href: "/admin/ai-testing",    icon: Bot },
+  { label: "Paper Analytics",      href: "/analytics/papers",    icon: LineChart },
 ];
 
 export function Sidebar() {
@@ -58,68 +58,90 @@ export function Sidebar() {
   const { user, logout } = useAuth();
   const { isAdmin } = useIsAdmin();
 
-  const NavLink = ({ item }: { item: typeof NAV_ITEMS[0] }) => (
-    <Link
-      href={item.href}
-      className={cn(
-        "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-        location === item.href || location.startsWith(item.href + "/")
-          ? "bg-[#0B1F3A]/10 text-[#0B1F3A]"
-          : "text-gray-500 hover:bg-gray-100 hover:text-[#0B1F3A]"
-      )}
-    >
-      <item.icon className="h-5 w-5" />
-      {item.label}
-    </Link>
-  );
+  const NavLink = ({ item, delay = 0 }: { item: typeof NAV_ITEMS[0]; delay?: number }) => {
+    const isActive = location === item.href || location.startsWith(item.href + "/");
+    return (
+      <Link
+        href={item.href}
+        className={cn(
+          "group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+          isActive
+            ? "sidebar-active-item text-white"
+            : "text-slate-400 hover:text-slate-100 hover:bg-white/[0.055]"
+        )}
+        style={{ animationDelay: `${delay}ms` }}
+      >
+        {isActive && (
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-gradient-to-b from-cyan-400 to-teal-400 rounded-r-full shadow-[0_0_8px_rgba(6,182,212,0.7)]" />
+        )}
+        <item.icon
+          className={cn(
+            "h-[17px] w-[17px] shrink-0 transition-colors duration-200",
+            isActive ? "text-cyan-400" : "text-slate-500 group-hover:text-slate-300"
+          )}
+        />
+        <span className="truncate">{item.label}</span>
+      </Link>
+    );
+  };
 
   const content = (
-    <div className="flex h-full flex-col border-r border-slate-200/80 bg-white">
-      <div className="p-6">
-        <BrandLogo href="/dashboard" imageClassName="h-12 w-auto" />
+    <div className="flex h-full flex-col" style={{ background: "var(--sidebar-bg)" }}>
+      {/* Top glow accent */}
+      <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
+
+      {/* Logo */}
+      <div className="px-5 py-5 border-b border-white/[0.06]">
+        <BrandLogo href="/dashboard" imageClassName="h-10 w-auto brightness-0 invert opacity-95" />
       </div>
 
-      <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map((item) => (
-          <NavLink key={item.href} item={item} />
+      {/* Navigation */}
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+        {NAV_ITEMS.map((item, i) => (
+          <NavLink key={item.href} item={item} delay={i * 30} />
         ))}
 
         {isAdmin && (
-          <div className="my-2 border-t pt-2">
-            {ADMIN_ITEMS.map((item) => (
-              <NavLink key={item.href} item={item} />
+          <div className="mt-5 pt-4 border-t border-white/[0.08]">
+            <p className="px-3 mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-600 select-none">
+              Admin
+            </p>
+            {ADMIN_ITEMS.map((item, i) => (
+              <NavLink key={item.href} item={item} delay={i * 25} />
             ))}
           </div>
         )}
       </nav>
 
+      {/* User footer */}
       {user && (
-        <div className="p-4 border-t">
-          <div className="flex items-center justify-between mb-4 px-2 py-1.5 bg-orange-50 rounded-md">
-            <div className="flex items-center gap-2">
-              <Flame className="h-4 w-4 text-orange-500 fill-orange-500" />
-              <span className="text-xs font-medium text-orange-700">
-                {user.streakDays} Day Streak
-              </span>
-            </div>
+        <div className="p-4 border-t border-white/[0.06] bg-white/[0.02]">
+          {/* Streak */}
+          <div className="flex items-center gap-2 mb-3.5 px-3 py-2 rounded-xl bg-orange-500/[0.12] border border-orange-500/[0.18]">
+            <Flame className="h-4 w-4 text-orange-400 fill-orange-400 shrink-0" />
+            <span className="text-xs font-semibold text-orange-300">{user.streakDays} Day Streak</span>
           </div>
 
+          {/* User row */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-[#0B1F3A]/10 flex items-center justify-center text-[#0B1F3A] font-bold text-sm shrink-0">
-              {user.name.charAt(0)}
+            <div className="relative shrink-0">
+              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-400 to-teal-500 flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-cyan-500/25">
+                {user.name.charAt(0)}
+              </div>
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#07101F]" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-[#0B1F3A] truncate">{user.name}</p>
-              <p className="text-xs text-gray-500 truncate">
+              <p className="text-sm font-semibold text-slate-200 truncate">{user.name}</p>
+              <p className="text-xs text-slate-500 truncate">
                 {user.level === "O_LEVEL" ? "O Level" : user.level === "A_LEVEL" ? "A Level" : ""}
               </p>
             </div>
             <button
               onClick={logout}
-              className="p-1.5 rounded-md hover:bg-gray-100 transition-colors"
               title="Log out"
+              className="p-1.5 rounded-lg hover:bg-white/[0.08] transition-colors"
             >
-              <LogOut className="h-4 w-4 text-gray-400" />
+              <LogOut className="h-4 w-4 text-slate-500 hover:text-slate-300 transition-colors" />
             </button>
           </div>
         </div>
@@ -129,12 +151,18 @@ export function Sidebar() {
 
   return (
     <>
+      {/* Desktop sidebar */}
       <div className="hidden md:flex h-screen w-64 flex-col fixed inset-y-0 z-50">
         {content}
       </div>
-      <div className="md:hidden flex h-14 items-center border-b border-slate-200/80 px-4 bg-white sticky top-0 z-40">
+
+      {/* Mobile topbar */}
+      <div
+        className="md:hidden flex h-14 items-center border-b border-white/[0.08] px-4 sticky top-0 z-40"
+        style={{ background: "var(--sidebar-bg)" }}
+      >
         <MobileMenu content={content} />
-        <BrandLogo href="/dashboard" className="ml-2" imageClassName="h-8 w-auto" />
+        <BrandLogo href="/dashboard" className="ml-2" imageClassName="h-8 w-auto brightness-0 invert opacity-90" />
       </div>
     </>
   );
@@ -146,13 +174,13 @@ function MobileMenu({ content }: { content: React.ReactNode }) {
       <input type="checkbox" id="mobile-menu" className="peer hidden" />
       <label
         htmlFor="mobile-menu"
-        className="-ml-2 p-2 cursor-pointer flex items-center justify-center rounded-md hover:bg-gray-100"
+        className="-ml-2 p-2 cursor-pointer flex items-center justify-center rounded-lg hover:bg-white/10 transition-colors"
       >
-        <Menu className="h-5 w-5 text-[#0B1F3A]" />
+        <Menu className="h-5 w-5 text-slate-300" />
       </label>
       <div className="hidden peer-checked:block fixed inset-0 z-50">
-        <label htmlFor="mobile-menu" className="absolute inset-0 bg-black/40" />
-        <div className="absolute left-0 top-0 h-full w-72 shadow-xl">
+        <label htmlFor="mobile-menu" className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+        <div className="absolute left-0 top-0 h-full w-72 shadow-2xl shadow-black/40">
           {content}
         </div>
       </div>
