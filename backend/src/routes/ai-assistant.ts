@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
+import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId } from "../services/physics-taxonomy-classifier";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 import { aiLimiter } from "../middleware/rate-limit";
@@ -81,6 +82,15 @@ function questionSearchAnswer(subject: { name: string; code: string }, sources: 
 async function retrieveResourceSources(client: SupabaseClient, input: z.infer<typeof RequestBody>, subject: { id: number; name: string; code: string }) {
   const { year, yearFrom, yearTo, paperNumber, session, difficulty, terms } = getFilters(input.message, input.year);
   const requestedTopic = detectRequestedTopic(input.message, subject.code);
+
+  // ── Taxonomy-first topic resolution (physics 0625/5054 only) ─────────────
+  const isPhysics = ["0625", "5054"].includes(subject.code);
+  let taxonomyTopicId: string | null = null;
+  if (isPhysics) {
+    // Try AI classifier first; fall back to keyword match (fast, no network).
+    taxonomyTopicId = await classifyQueryTopicId(input.message).catch(() => null)
+      ?? keywordClassifyTopicId(input.message);
+  }
   let resourcesQuery = client.from("resources")
     .select("id,title,resource_type,year,session,paper_code,variant,processing_status")
     .eq("subject_id", subject.id).eq("is_approved", true);
@@ -102,18 +112,46 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   if (paperNumber) indexedQuery = indexedQuery.eq("paper_code", String(paperNumber));
   if (session) indexedQuery = indexedQuery.eq("session", session);
   if (difficulty) indexedQuery = indexedQuery.eq("difficulty", difficulty);
-  if (requestedTopic) {
-    indexedQuery = requestedTopic.topic === "Energy"
-      ? indexedQuery.or("topic.ilike.%Energy%,topic.ilike.%Work Energy and Power%")
-      : indexedQuery.ilike("topic", requestedTopic.topic);
-    if (requestedTopic.subtopics.length) {
-      indexedQuery = indexedQuery.or([
-        ...requestedTopic.subtopics.map((subtopic) => `subtopic.ilike.%${subtopic}%`),
-        ...requestedTopic.keywords.map((keyword) => `clean_question_text.ilike.%${keyword}%`),
-      ].join(","));
+  // ── Topic-first filtering ──────────────────────────────────────────────────
+  // For physics: try taxonomy_topic_id filter; expand to parent if too narrow.
+  // For non-physics or when no topic resolved: fall through to ILIKE.
+  let taxonomyFiltered = false;
+  if (isPhysics && taxonomyTopicId) {
+    const exactQuery = indexedQuery.eq("taxonomy_topic_id", taxonomyTopicId);
+    const { count: exactCount, error: countErr } = await client
+      .from("question_index")
+      .select("id", { count: "exact", head: true })
+      .eq("subject_id", subject.id)
+      .eq("student_verified", true)
+      .not("clean_question_text", "is", null)
+      .eq("taxonomy_topic_id", taxonomyTopicId);
+    if (!countErr && (exactCount ?? 0) >= 3) {
+      indexedQuery = exactQuery;
+      taxonomyFiltered = true;
+    } else {
+      // Expand to sibling subtopics under the same parent section.
+      const parentId = parentTopicId(taxonomyTopicId);
+      if (parentId) {
+        indexedQuery = indexedQuery.like("taxonomy_topic_id", `${parentId}.%`);
+        taxonomyFiltered = true;
+      }
     }
-  } else if (terms.length) {
-    indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `clean_question_text.ilike.%${term}%`]).join(","));
+  }
+
+  if (!taxonomyFiltered) {
+    if (requestedTopic) {
+      indexedQuery = requestedTopic.topic === "Energy"
+        ? indexedQuery.or("topic.ilike.%Energy%,topic.ilike.%Work Energy and Power%")
+        : indexedQuery.ilike("topic", requestedTopic.topic);
+      if (requestedTopic.subtopics.length) {
+        indexedQuery = indexedQuery.or([
+          ...requestedTopic.subtopics.map((subtopic) => `subtopic.ilike.%${subtopic}%`),
+          ...requestedTopic.keywords.map((keyword) => `clean_question_text.ilike.%${keyword}%`),
+        ].join(","));
+      }
+    } else if (terms.length) {
+      indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `clean_question_text.ilike.%${term}%`]).join(","));
+    }
   }
   const [resources, chunks, indexed, topicMap] = await Promise.all([
     resourcesQuery.order("year", { ascending: false }).limit(100),

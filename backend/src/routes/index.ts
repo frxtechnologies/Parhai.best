@@ -10,6 +10,7 @@ import adminUsersRouter from "./admin-users";
 import questionSolverRouter from "./question-solver";
 import notesGeneratorRouter from "./notes-generator";
 import paperCheckerRouter from "./paper-checker";
+import adminTopicReviewRouter from "./admin-topic-review";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(adminUsersRouter);
 router.use(questionSolverRouter);
 router.use(notesGeneratorRouter);
 router.use(paperCheckerRouter);
+router.use(adminTopicReviewRouter);
 
 export default router;

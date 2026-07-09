@@ -109,6 +109,13 @@ export async function generateAiAnswer(systemInstruction: string, prompt: string
   return getAiProvider() === "gemini" ? geminiChat(systemInstruction, prompt) : compatibleChat(systemInstruction, prompt);
 }
 
+/** Like generateAiAnswer but requests JSON output from the model. */
+export async function generateAiJson(systemInstruction: string, prompt: string): Promise<string> {
+  return getAiProvider() === "gemini"
+    ? geminiChat(systemInstruction, prompt, true)
+    : compatibleChat(systemInstruction, prompt, true);
+}
+
 /** A single image or document to send to a vision model. `data` is base64 (no data: prefix). */
 export type VisionInput = { data: string; mimeType: string };
 
