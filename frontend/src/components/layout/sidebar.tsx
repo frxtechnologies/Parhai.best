@@ -92,7 +92,7 @@ export function Sidebar() {
 
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/[0.06]">
-        <BrandLogo href="/dashboard" imageClassName="h-10 w-auto brightness-0 invert opacity-95" />
+        <BrandLogo href="/dashboard" dark imageClassName="h-8 w-auto" />
       </div>
 
       {/* Navigation */}
@@ -162,7 +162,7 @@ export function Sidebar() {
         style={{ background: "var(--sidebar-bg)" }}
       >
         <MobileMenu content={content} />
-        <BrandLogo href="/dashboard" className="ml-2" imageClassName="h-8 w-auto brightness-0 invert opacity-90" />
+        <BrandLogo href="/dashboard" className="ml-2" dark imageClassName="h-7 w-auto" />
       </div>
     </>
   );

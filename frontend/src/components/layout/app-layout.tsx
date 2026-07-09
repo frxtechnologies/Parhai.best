@@ -14,7 +14,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="relative animate-scale-in">
           <div className="absolute inset-0 rounded-3xl blur-2xl bg-cyan-500/20 animate-glow-pulse" />
           <div className="relative glass-dark rounded-3xl p-8 shadow-2xl">
-            <BrandLogo linked={false} imageClassName="h-16 w-auto brightness-0 invert" />
+            <BrandLogo linked={false} dark imageClassName="h-14 w-auto" />
           </div>
         </div>
         <div className="mt-8 flex items-center gap-2">

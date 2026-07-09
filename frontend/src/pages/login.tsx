@@ -75,7 +75,7 @@ export default function Login() {
           <div className="absolute bottom-1/4 right-1/4 h-56 w-56 rounded-full bg-teal-500/08 blur-3xl" />
         </div>
         <div className="relative text-center max-w-sm">
-          <BrandLogo linked={false} imageClassName="h-14 w-auto brightness-0 invert opacity-90 mb-10 mx-auto" />
+          <BrandLogo linked={false} dark imageClassName="h-11 w-auto mb-10 mx-auto" />
           <h2 className="text-3xl font-bold text-white leading-tight mb-4">
             Your Cambridge<br />
             <span className="gradient-text-light">study companion.</span>
@@ -104,7 +104,7 @@ export default function Login() {
       {/* ── Right panel (auth card) ── */}
       <div className="flex-1 flex items-center justify-center p-6 relative">
         <Link href="/" className="absolute left-5 top-5 lg:hidden">
-          <BrandLogo linked={false} imageClassName="h-10 w-auto brightness-0 invert opacity-90" />
+          <BrandLogo linked={false} dark imageClassName="h-9 w-auto" />
         </Link>
 
         <div className="w-full max-w-md animate-scale-in">

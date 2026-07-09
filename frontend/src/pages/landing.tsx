@@ -16,7 +16,7 @@ export default function Landing() {
       {/* ── NAV ── */}
       <nav className="hero-mesh sticky top-0 z-50 border-b border-white/[0.06]">
         <div className="container mx-auto px-4 h-18 flex items-center justify-between py-4">
-          <BrandLogo imageClassName="h-11 w-auto brightness-0 invert opacity-95" />
+          <BrandLogo dark imageClassName="h-10 w-auto" />
           <div className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
             <a href="#features" className="hover:text-white transition-colors">Features</a>
             <a href="#how-it-works" className="hover:text-white transition-colors">How it Works</a>
@@ -197,7 +197,7 @@ export default function Landing() {
       <footer className="hero-mesh border-t border-white/[0.06] py-14">
         <div className="container mx-auto px-4 text-center">
           <div className="mb-6 flex justify-center">
-            <BrandLogo linked={false} imageClassName="h-12 w-auto brightness-0 invert opacity-80" />
+            <BrandLogo linked={false} dark imageClassName="h-10 w-auto" />
           </div>
           <p className="text-slate-500 mb-6 text-sm">The modern AI study companion for Cambridge students.</p>
           <p className="text-sm text-slate-600">&copy; {new Date().getFullYear()} Parhai.com. All rights reserved.</p>
