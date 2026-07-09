@@ -1,4 +1,4 @@
-export type AiProvider = "gemini" | "xai" | "openai" | "groq" | "openrouter";
+export type AiProvider = "gemini" | "xai" | "openai" | "groq" | "openrouter" | "ollama";
 export type QuestionClassification = {
   number: string;
   topic: string;
@@ -7,7 +7,9 @@ export type QuestionClassification = {
   summary: string;
 };
 
-const PROVIDERS: AiProvider[] = ["gemini", "xai", "openai", "groq", "openrouter"];
+const PROVIDERS: AiProvider[] = ["gemini", "xai", "openai", "groq", "openrouter", "ollama"];
+// Self-hosted / local providers that require no API key.
+const KEYLESS_PROVIDERS = new Set<AiProvider>(["ollama"]);
 const provider = (process.env.AI_PROVIDER?.trim().toLowerCase() || "gemini") as AiProvider;
 const sharedModel = process.env.AI_MODEL?.trim();
 
@@ -17,6 +19,8 @@ const providerConfig: Record<AiProvider, { key: string | undefined; keyName: str
   openai: { key: process.env.OPENAI_API_KEY, keyName: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", model: sharedModel || process.env.OPENAI_MODEL || process.env.OPENAI_CHAT_MODEL || "gpt-4.1-mini" },
   groq: { key: process.env.GROQ_API_KEY, keyName: "GROQ_API_KEY", baseUrl: "https://api.groq.com/openai/v1", model: sharedModel || process.env.GROQ_MODEL || "llama-3.3-70b-versatile" },
   openrouter: { key: process.env.OPENROUTER_API_KEY, keyName: "OPENROUTER_API_KEY", baseUrl: "https://openrouter.ai/api/v1", model: sharedModel || process.env.OPENROUTER_MODEL || "openai/gpt-4.1-mini" },
+  // Local Ollama via its OpenAI-compatible endpoint (default http://localhost:11434/v1). No key needed.
+  ollama: { key: process.env.OLLAMA_API_KEY, keyName: "OLLAMA_API_KEY", baseUrl: (process.env.OLLAMA_BASE_URL?.trim().replace(/\/+$/, "")) || "http://localhost:11434/v1", model: sharedModel || process.env.OLLAMA_MODEL || "llama3.1" },
 };
 
 export const AI_EMBEDDING_DIMENSIONS = 768;
@@ -24,7 +28,9 @@ export const AI_EMBEDDING_MODEL = provider === "gemini"
   ? process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001"
   : provider === "openai"
     ? process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small"
-    : `local-feature-hash-v1:${provider}`;
+    : provider === "ollama"
+      ? process.env.OLLAMA_EMBEDDING_MODEL ?? "nomic-embed-text"
+      : `local-feature-hash-v1:${provider}`;
 
 export function getAiProvider() {
   if (!PROVIDERS.includes(provider)) throw new Error(`Unsupported AI_PROVIDER '${provider}'. Use ${PROVIDERS.join(", ")}.`);
@@ -33,6 +39,7 @@ export function getAiProvider() {
 
 export function getAiConfigurationError() {
   if (!PROVIDERS.includes(provider)) return `Unsupported AI_PROVIDER '${provider}'.`;
+  if (KEYLESS_PROVIDERS.has(provider)) return null; // local providers (e.g. Ollama) need no key
   const config = providerConfig[provider];
   return config.key ? null : `AI assistant is not configured yet. Please add ${config.keyName} for AI_PROVIDER=${provider}.`;
 }
@@ -44,7 +51,7 @@ export function isAiConfigured() {
 export function getAiStatus() {
   const selected = getAiProvider();
   const config = providerConfig[selected];
-  return { provider: selected, model: config.model, apiKeyDetected: Boolean(config.key), embeddingModel: AI_EMBEDDING_MODEL };
+  return { provider: selected, model: config.model, apiKeyDetected: KEYLESS_PROVIDERS.has(selected) || Boolean(config.key), embeddingModel: AI_EMBEDDING_MODEL };
 }
 
 async function providerError(response: Response, body: { error?: { message?: string } | string; message?: string }, action: string) {
@@ -86,7 +93,7 @@ async function compatibleChat(systemInstruction: string, prompt: string, jsonMod
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${config.key}`,
+      Authorization: `Bearer ${config.key ?? "local"}`,
       "Content-Type": "application/json",
       ...(provider === "openrouter" ? { "HTTP-Referer": "https://parhais.netlify.app", "X-Title": "Parhai.com" } : {}),
     },
@@ -94,9 +101,9 @@ async function compatibleChat(systemInstruction: string, prompt: string, jsonMod
       model: config.model,
       messages: [{ role: "system", content: systemInstruction }, { role: "user", content: prompt }],
       temperature: 0.1,
-      ...(jsonMode && ["openai", "groq"].includes(provider) ? { response_format: { type: "json_object" } } : {}),
+      ...(jsonMode && ["openai", "groq", "ollama"].includes(provider) ? { response_format: { type: "json_object" } } : {}),
     }),
-    signal: AbortSignal.timeout(45_000),
+    signal: AbortSignal.timeout(provider === "ollama" ? 120_000 : 45_000),
   });
   const body = await response.json() as { error?: { message?: string }; choices?: Array<{ message?: { content?: string } }> };
   if (!response.ok) throw await providerError(response, body, "AI request");
@@ -176,7 +183,7 @@ async function compatibleVision(systemInstruction: string, prompt: string, image
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${config.key}`,
+      Authorization: `Bearer ${config.key ?? "local"}`,
       "Content-Type": "application/json",
       ...(provider === "openrouter" ? { "HTTP-Referer": "https://parhais.netlify.app", "X-Title": "Parhai.com" } : {}),
     },
@@ -185,9 +192,9 @@ async function compatibleVision(systemInstruction: string, prompt: string, image
       messages: [{ role: "system", content: systemInstruction }, { role: "user", content }],
       temperature: 0.1,
       max_tokens: 4096,
-      ...(jsonMode && ["openai", "groq"].includes(provider) ? { response_format: { type: "json_object" } } : {}),
+      ...(jsonMode && ["openai", "groq", "ollama"].includes(provider) ? { response_format: { type: "json_object" } } : {}),
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(provider === "ollama" ? 180_000 : 90_000),
   });
   const body = await response.json() as { error?: { message?: string }; choices?: Array<{ message?: { content?: string } }> };
   if (!response.ok) throw await providerError(response, body, "Vision request");
@@ -271,13 +278,34 @@ async function openAiEmbeddings(texts: string[]) {
   return (body.data ?? []).sort((a, b) => a.index - b.index).map((item) => item.embedding);
 }
 
+/** Ollama embeddings via its OpenAI-compatible /v1/embeddings endpoint. */
+async function ollamaEmbeddings(texts: string[]) {
+  const config = requireConfig();
+  const response = await fetch(`${config.baseUrl}/embeddings`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.key ?? "local"}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: AI_EMBEDDING_MODEL, input: texts }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = await response.json() as { error?: { message?: string } | string; message?: string; data?: Array<{ index: number; embedding: number[] }> };
+  if (!response.ok) {
+    const detail = typeof body.error === "string" ? body.error : body.error?.message ?? body.message ?? "";
+    if (response.status === 404 || /not found|try pulling|no such model/i.test(detail)) {
+      throw new Error(`Ollama embedding model '${AI_EMBEDDING_MODEL}' is not installed. Run:  ollama pull ${AI_EMBEDDING_MODEL}`);
+    }
+    throw await providerError(response, body, "AI embedding");
+  }
+  return (body.data ?? []).sort((a, b) => a.index - b.index).map((item) => item.embedding);
+}
+
 async function createEmbeddings(texts: string[], taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY") {
   if (!texts.length) return [];
   requireConfig();
   const selected = getAiProvider();
   const embeddings = selected === "gemini" ? await geminiEmbeddings(texts, taskType)
     : selected === "openai" ? await openAiEmbeddings(texts)
-      : texts.map(localFeatureEmbedding);
+      : selected === "ollama" ? await ollamaEmbeddings(texts)
+        : texts.map(localFeatureEmbedding);
   if (embeddings.length !== texts.length || embeddings.some((embedding) => embedding.length !== AI_EMBEDDING_DIMENSIONS)) throw new Error("The AI service returned invalid embeddings.");
   return embeddings;
 }
