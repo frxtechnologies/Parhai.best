@@ -70,7 +70,8 @@ export async function retrieveGroundedContext(
   let questionQuery = client.from("question_index")
     .select("id,resource_id,question_number,topic,subtopic,difficulty,marks,total_marks,clean_question_text,display_question_text,question_text,answer_text,year,session,paper_code,variant,source_file,marking_scheme_link_status")
     .eq("subject_id", subject.id)
-    .eq("student_verified", true)
+    // Eligibility = usable extracted text, not topic certainty or complete metadata (Phase 0, F9).
+    .in("text_quality_status", ["good", "acceptable"])
     .not("clean_question_text", "is", null);
   if (options.year) questionQuery = questionQuery.eq("year", options.year);
   if (terms.length) questionQuery = questionQuery.or(orFilter(terms, ["topic", "subtopic", "clean_question_text"]));

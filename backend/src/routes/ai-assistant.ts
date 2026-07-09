@@ -111,7 +111,9 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   let indexedQuery = client.from("question_index")
     .select("id,resource_id,legacy_source_id,question_number,topic,subtopic,difficulty,marks,total_marks,display_question_text,clean_question_text,question_text,answer_text,question_screenshot_url,screenshot_status,source_page,bbox,confidence,needs_review,text_quality_status,student_verified,marking_scheme_link_status,source_file,year,session,paper_code,variant,resources!inner(id,title,bucket,storage_path,related_resource_id,is_approved)")
     .eq("subject_id", subject.id).eq("resources.is_approved", true)
-    .eq("student_verified", true).not("clean_question_text", "is", null);
+    // Eligibility = usable extracted text, NOT topic certainty or complete metadata.
+    // Topic-uncertain questions still surface (carrying needs_review) instead of being hidden.
+    .in("text_quality_status", ["good", "acceptable"]).not("clean_question_text", "is", null);
   if (year) indexedQuery = indexedQuery.eq("year", year);
   if (yearFrom) indexedQuery = indexedQuery.gte("year", yearFrom);
   if (yearTo) indexedQuery = indexedQuery.lte("year", yearTo);
@@ -129,7 +131,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
       .from("question_index")
       .select("id", { count: "exact", head: true })
       .eq("subject_id", subject.id)
-      .eq("student_verified", true)
+      .in("text_quality_status", ["good", "acceptable"])
       .not("clean_question_text", "is", null)
       .eq("taxonomy_topic_id", taxonomyTopicId);
     if (!countErr && (exactCount ?? 0) >= 3) {
