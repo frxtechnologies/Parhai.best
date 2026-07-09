@@ -9,6 +9,7 @@ import revisionPlannerRouter from "./revision-planner";
 import adminUsersRouter from "./admin-users";
 import questionSolverRouter from "./question-solver";
 import notesGeneratorRouter from "./notes-generator";
+import paperCheckerRouter from "./paper-checker";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(revisionPlannerRouter);
 router.use(adminUsersRouter);
 router.use(questionSolverRouter);
 router.use(notesGeneratorRouter);
+router.use(paperCheckerRouter);
 
 export default router;

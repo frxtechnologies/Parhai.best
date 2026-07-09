@@ -19,6 +19,7 @@ import type {
   GeneratedNotes,
   NoteType,
   Paper,
+  PaperReport,
   Question,
   RevisionPlan,
   RevisionPlanInput,
@@ -1011,6 +1012,37 @@ export function useSolveQuestion() {
           topic: result.extraction.topic,
         }).then(() => queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() }));
       }
+    },
+  });
+}
+
+async function checkPaper(input: { files: File[]; subjectId?: number | null }): Promise<PaperReport> {
+  const client = requireSupabase();
+  const { data: sessionData } = await client.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) throw new Error("Please sign in again to check a paper.");
+
+  const form = new FormData();
+  for (const file of input.files) form.append("pages", file);
+  if (input.subjectId) form.append("subjectId", String(input.subjectId));
+
+  const response = await fetch(`${API_BASE_URL}/api/check-paper`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form,
+  });
+  const body = (await response.json()) as PaperReport & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Could not check the paper.");
+  return body;
+}
+
+export function useCheckPaper() {
+  const queryClient = useQueryClient();
+  return useMutation<PaperReport, Error, { files: File[]; subjectId?: number | null }>({
+    mutationFn: checkPaper,
+    onSuccess: (_result, variables) => {
+      void logStudyEvent(STUDY_EVENT.QUESTION_PRACTICED, variables.subjectId ?? null, { via: "paper_checker" })
+        .then(() => queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() }));
     },
   });
 }

@@ -13,6 +13,7 @@ import {
   CalendarClock,
   ScanText,
   Sparkles,
+  ClipboardCheck,
   LogOut,
   Flame,
   Menu,
@@ -36,6 +37,7 @@ const NAV_ITEMS = [
   { label: "AI Tutor", href: "/ai", icon: Bot },
   { label: "Question Solver", href: "/question-solver", icon: ScanText },
   { label: "Notes Generator", href: "/notes-generator", icon: Sparkles },
+  { label: "Paper Checker", href: "/paper-checker", icon: ClipboardCheck },
   { label: "Revision Planner", href: "/revision-planner", icon: CalendarClock },
   { label: "Progress", href: "/progress", icon: LineChart },
 ];

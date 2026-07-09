@@ -201,6 +201,36 @@ export interface SolvedQuestion {
   usedGroundedSources?: boolean;
 }
 
+export interface MarkedQuestion {
+  questionNumber: string;
+  topic: string | null;
+  awardedMarks: number;
+  totalMarks: number;
+  whatWentWell: string;
+  missingPoints: string;
+  modelAnswer: string;
+}
+
+export interface TopicPerformance {
+  topic: string;
+  awarded: number;
+  total: number;
+  ratio: number;
+}
+
+export interface PaperReport {
+  questions: MarkedQuestion[];
+  totalAwarded: number;
+  totalPossible: number;
+  percentage: number;
+  grade: string;
+  strongTopics: string[];
+  weakTopics: string[];
+  topicBreakdown: TopicPerformance[];
+  usedGroundedSources: boolean;
+  sources: Array<{ index: number; type: string; reference: string }>;
+}
+
 export interface AdminUser {
   id: string;
   email: string | null;
