@@ -20,13 +20,20 @@ router.get("/admin/physics/needs-review", requireAdmin, async (req, res): Promis
   const limit = Math.min(Number(req.query.limit ?? 50), 200);
   const offset = Number(req.query.offset ?? 0);
 
+  // question_index has no subject_code column — resolve subject_id via subjects.
+  const { data: subjects, error: subjErr } = await supabaseAdmin
+    .from("subjects").select("id").eq("code", subject_code);
+  if (subjErr) { res.status(500).json({ error: subjErr.message }); return; }
+  const subjectIds = (subjects ?? []).map((s) => s.id as number);
+  if (subjectIds.length === 0) { res.json({ total: 0, limit, offset, questions: [] }); return; }
+
   const { data, error, count } = await supabaseAdmin
     .from("question_index")
     .select(
       "id,year,session,paper_code,variant,question_number,topic,subtopic,clean_question_text,taxonomy_topic_id,taxonomy_confidence,needs_review",
       { count: "exact" },
     )
-    .eq("subject_code", subject_code)
+    .in("subject_id", subjectIds)
     .or("taxonomy_topic_id.is.null,needs_review.eq.true")
     .order("year", { ascending: false })
     .range(offset, offset + limit - 1);

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
 import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId } from "../services/physics-taxonomy-classifier";
+import { logRetrievalTelemetry } from "../services/intelligence-telemetry";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 import { aiLimiter } from "../middleware/rate-limit";
@@ -86,10 +87,15 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   // ── Taxonomy-first topic resolution (physics 0625/5054 only) ─────────────
   const isPhysics = ["0625", "5054"].includes(subject.code);
   let taxonomyTopicId: string | null = null;
+  let topicMethod: "ai" | "keyword" | "none" = "none";
   if (isPhysics) {
     // Try AI classifier first; fall back to keyword match (fast, no network).
-    taxonomyTopicId = await classifyQueryTopicId(input.message).catch(() => null)
-      ?? keywordClassifyTopicId(input.message);
+    const aiTopic = await classifyQueryTopicId(input.message).catch(() => null);
+    if (aiTopic) { taxonomyTopicId = aiTopic; topicMethod = "ai"; }
+    else {
+      const kwTopic = keywordClassifyTopicId(input.message);
+      if (kwTopic) { taxonomyTopicId = kwTopic; topicMethod = "keyword"; }
+    }
   }
   let resourcesQuery = client.from("resources")
     .select("id,title,resource_type,year,session,paper_code,variant,processing_status")
@@ -116,6 +122,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   // For physics: try taxonomy_topic_id filter; expand to parent if too narrow.
   // For non-physics or when no topic resolved: fall through to ILIKE.
   let taxonomyFiltered = false;
+  let retrievalStrategy: "taxonomy_exact" | "taxonomy_parent" | "topic_ilike" | "keyword_ilike" | "semantic_only" = "semantic_only";
   if (isPhysics && taxonomyTopicId) {
     const exactQuery = indexedQuery.eq("taxonomy_topic_id", taxonomyTopicId);
     const { count: exactCount, error: countErr } = await client
@@ -128,12 +135,14 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     if (!countErr && (exactCount ?? 0) >= 3) {
       indexedQuery = exactQuery;
       taxonomyFiltered = true;
+      retrievalStrategy = "taxonomy_exact";
     } else {
       // Expand to sibling subtopics under the same parent section.
       const parentId = parentTopicId(taxonomyTopicId);
       if (parentId) {
         indexedQuery = indexedQuery.like("taxonomy_topic_id", `${parentId}.%`);
         taxonomyFiltered = true;
+        retrievalStrategy = "taxonomy_parent";
       }
     }
   }
@@ -149,8 +158,10 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
           ...requestedTopic.keywords.map((keyword) => `clean_question_text.ilike.%${keyword}%`),
         ].join(","));
       }
+      retrievalStrategy = "topic_ilike";
     } else if (terms.length) {
       indexedQuery = indexedQuery.or(terms.slice(0, 4).flatMap((term) => [`topic.ilike.%${term}%`, `subtopic.ilike.%${term}%`, `clean_question_text.ilike.%${term}%`]).join(","));
+      retrievalStrategy = "keyword_ilike";
     }
   }
   const [resources, chunks, indexed, topicMap] = await Promise.all([
@@ -210,7 +221,13 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     return true;
   });
   const sources = rankEvidence(uniqueSources, terms, 12);
-  return { resources: resources.data ?? [], sources, indexedQuestionCount: indexed.data?.length ?? 0, duplicatesRemoved: deduplicated.removed, topicMapCount: topicMap.count ?? 0 };
+  const topSimilarity = semanticSources.reduce((max, s) => Math.max(max, Number(s.metadata.similarity ?? 0)), 0);
+  return {
+    resources: resources.data ?? [], sources,
+    indexedQuestionCount: indexed.data?.length ?? 0,
+    duplicatesRemoved: deduplicated.removed, topicMapCount: topicMap.count ?? 0,
+    taxonomyTopicId, topicMethod, retrievalStrategy, topSimilarity,
+  };
 }
 
 function getFilters(message: string, explicitYear?: number | null) {
@@ -294,6 +311,7 @@ async function retrieveSources(client: SupabaseClient, input: z.infer<typeof Req
 }
 
 router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<void> => {
+  const startedAt = Date.now();
   try {
     const parsed = RequestBody.safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid AI request." }); return; }
@@ -339,6 +357,24 @@ router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<v
     const retrieved = questionListRequest
       ? rankedRetrieved.filter((source) => source.sourceType === "question").slice(0, 6)
       : rankedRetrieved;
+    // Best-effort retrieval telemetry (never blocks or breaks the response).
+    const recordTelemetry = (providerOk: boolean, sourceCount: number, questionCount: number) =>
+      void logRetrievalTelemetry(client, {
+        userId: res.locals.user.id,
+        subjectId: subject.id,
+        subjectCode: subject.code,
+        queryText: input.message,
+        mode,
+        resolvedTopicId: resourceRetrieval.taxonomyTopicId,
+        topicMethod: resourceRetrieval.topicMethod,
+        retrievalStrategy: resourceRetrieval.retrievalStrategy,
+        sourcesReturned: sourceCount,
+        questionSources: questionCount,
+        topSimilarity: resourceRetrieval.topSimilarity || null,
+        answerLength: input.answerLength,
+        providerOk,
+        latencyMs: Date.now() - startedAt,
+      });
     const onlyUnprocessedResources = resourceRetrieval.resources.length > 0 && resourceRetrieval.resources.every((resource) => resource.processing_status !== "processed");
     const onlyUnprocessedPapers = legacyRetrieval.matchedPapers.length > 0 && legacyRetrieval.extractedQuestionCount === 0;
     if (mode === "rag" && !retrieved.length && (onlyUnprocessedResources || onlyUnprocessedPapers)) {
@@ -355,6 +391,7 @@ router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<v
         resourceRetrieval.topicMapCount === 0 && subject.code === "4024" ? "Maths topic map missing." : null,
         failedPapers.length && markingSchemes.length ? `${failedPapers.length} Maths question paper${failedPapers.length === 1 ? " has" : "s have"} failed processing while marking schemes are available.` : null,
       ].filter(Boolean);
+      recordTelemetry(true, 0, 0);
       res.json({ answer: statusMessages.join(" ") || MISSING_SOURCE_MESSAGE, sources: [], ...(input.debug ? { retrievedResults: [], diagnostics } : {}) });
       return;
     }
@@ -419,6 +456,7 @@ Do not create a separate Sources section; Parhai renders verified sources below 
           ? `${questionSearchAnswer(subject, retrieved, input.message)}\n\nI found verified questions from your uploaded papers. A full AI explanation is temporarily unavailable, but you can still review the source cards below.`
           : "I found verified questions from your uploaded papers. A full AI explanation is temporarily unavailable, but you can still review the source cards below."
         : "I could not find a matching verified question in your uploaded papers yet.";
+      recordTelemetry(false, fallbackSources.length, fallbackSources.length);
       res.json({ answer: [resultSummary, fallbackAnswer].filter(Boolean).join("\n\n"), sources: fallbackSources, providerUnavailable: true, ...(input.debug ? { providerError: providerError instanceof Error ? providerError.message : "AI provider request failed.", retrievedResults: retrieved, diagnostics } : {}) });
       return;
     }
@@ -438,10 +476,42 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       ? formatQuestionResultSummary(resourceRetrieval.indexedQuestionCount, resourceRetrieval.duplicatesRemoved, displayedQuestions)
       : "";
     const presentedAnswer = questionListRequest ? questionSearchAnswer(subject, retrieved, input.message) : grounded.answer;
+    recordTelemetry(true, sources.length, displayedQuestions);
     res.json({ answer: [resultSummary, presentedAnswer].filter(Boolean).join("\n\n"), sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
     req.log.error({ error }, "AI assistant request failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "AI assistant request failed." });
+  }
+});
+
+const FeedbackBody = z.object({
+  telemetryId: z.coerce.number().int().positive().nullable().optional(),
+  subjectId: z.coerce.number().int().positive(),
+  rating: z.union([z.literal(1), z.literal(-1)]),
+  reason: z.enum(["helpful", "wrong_topic", "hallucinated", "no_sources", "incomplete", "other"]).optional(),
+  comment: z.string().trim().max(2000).optional(),
+});
+
+/** Student feedback on an AI answer — powers the self-learning / quality loop. */
+router.post("/ai/feedback", requireUser, async (req, res): Promise<void> => {
+  try {
+    const parsed = FeedbackBody.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid feedback." }); return; }
+    const token = req.header("authorization")?.replace(/^Bearer\s+/i, "");
+    const client = createUserClient(token!);
+    const { telemetryId, subjectId, rating, reason, comment } = parsed.data;
+    const { error } = await client.from("ai_answer_feedback").insert({
+      telemetry_id: telemetryId ?? null,
+      user_id: res.locals.user.id,
+      subject_id: subjectId,
+      rating,
+      reason: reason ?? null,
+      comment: comment ?? null,
+    });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Could not save feedback." });
   }
 });
 
