@@ -1,11 +1,10 @@
-import { useClearAiHistory,useGetAiHistory,useGetSubject,useListPapers,useSendAiMessage } from "@/api/client";
+import { useClearAiHistory,useGetAiHistory,useGetSubject,useIsAdmin,useListPapers,useSendAiMessage } from "@/api/client";
 import type { AiMessage } from "@/api/types";
 import { AIErrorCard } from "@/components/ai-tutor/ai-error-card";
 import { AIMessage as MessageCard,AIThinkingState } from "@/components/ai-tutor/ai-message";
 import { ChatComposer } from "@/components/ai-tutor/chat-composer";
 import { StudyContextPanel } from "@/components/ai-tutor/study-context-panel";
 import { AppLayout } from "@/components/layout/app-layout";
-import { isAdminEmail } from "@/config/admin";
 import { useAuth } from "@/context/auth-context";
 import { exportQuestionWorksheet } from "@/lib/worksheet-export";
 import { ChevronDown,Download,Filter,PanelRight,ShieldCheck,Sparkles,Trash2,X } from "lucide-react";
@@ -17,7 +16,7 @@ const starters=["Find Light questions from 2020–2024","Explain 5054_w22_qp_11 
 const teacher=(name:string)=>/math/i.test(name)?"Cambridge Mathematics Teacher":`Cambridge ${name} Teacher`;
 
 export default function SubjectAi(){
-  const subjectId=Number(useParams().id??0),{user}=useAuth(),admin=isAdminEmail(user?.email);
+  const subjectId=Number(useParams().id??0),{user}=useAuth(),admin=useIsAdmin().isAdmin;
   const {data:subject,isLoading}=useGetSubject(subjectId),{data:papers=[]}=useListPapers({subjectId}),{data:history=[],isLoading:historyLoading}=useGetAiHistory(subjectId);
   const send=useSendAiMessage(),clear=useClearAiHistory();
   const [input,setInput]=useState(""),[paperId,setPaperId]=useState(""),[answerLength,setAnswerLength]=useState<"quick"|"teacher"|"full">("teacher"),[local,setLocal]=useState<AiMessage[]>([]),[failed,setFailed]=useState<{message:string;error:string}|null>(null),[drawer,setDrawer]=useState(false);

@@ -1,7 +1,5 @@
 import type { AiSource } from "@/api/types";
-import { API_BASE_URL } from "@/api/client";
-import { isAdminEmail } from "@/config/admin";
-import { useAuth } from "@/context/auth-context";
+import { API_BASE_URL, useIsAdmin } from "@/api/client";
 import { requireSupabase } from "@/lib/supabase";
 import { ExternalLink, FileCheck2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -15,7 +13,7 @@ export function SourceCard({ source, onExplain, generatePreview = false, rank }:
   const [previewUrl, setPreviewUrl] = useState(source.screenshotUrl ?? null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(source.screenshotStatus === "failed");
-  const { user } = useAuth();
+  const { isAdmin } = useIsAdmin();
 
   async function generateScreenshot() {
     setLoading(true);
@@ -75,7 +73,7 @@ export function SourceCard({ source, onExplain, generatePreview = false, rank }:
     {source.questionText && <details className="mt-2 rounded-lg bg-slate-50 p-2 text-xs"><summary className="cursor-pointer font-semibold">View question text</summary><p className="mt-2 whitespace-pre-wrap">{source.questionText}</p></details>}
     {source.answerText && <details className="mt-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900"><summary className="cursor-pointer font-semibold">View marking scheme</summary><p className="mt-2 whitespace-pre-wrap">{source.answerText}</p></details>}
     {source.sourceType === "question" && !source.answerText && <p className="mt-2 px-1 text-xs text-slate-400">Marking scheme not linked yet</p>}
-    {isAdminEmail(user?.email) && <details className="mt-2 rounded-lg border border-dashed p-2 text-[11px] text-slate-500"><summary className="cursor-pointer font-semibold">Screenshot debug</summary><pre className="mt-2 whitespace-pre-wrap break-all">{JSON.stringify({
+    {isAdmin && <details className="mt-2 rounded-lg border border-dashed p-2 text-[11px] text-slate-500"><summary className="cursor-pointer font-semibold">Screenshot debug</summary><pre className="mt-2 whitespace-pre-wrap break-all">{JSON.stringify({
       question_id: source.chunkId, resource_id: source.resourceId, source_page: source.sourcePage,
       bbox: source.bbox, screenshot_status: failed ? "failed" : source.screenshotStatus, file_path: source.filePath,
       confidence: source.confidence, needs_review: source.needsReview,

@@ -13,6 +13,10 @@ import Papers from "@/pages/papers";
 import Notes from "@/pages/notes";
 import Questions from "@/pages/questions";
 import AiTutor from "@/pages/ai-tutor";
+import QuestionSolver from "@/pages/question-solver";
+import NotesGenerator from "@/pages/notes-generator";
+import PaperChecker from "@/pages/paper-checker";
+import RevisionPlanner from "@/pages/revision-planner";
 import Progress from "@/pages/progress";
 import Admin from "@/pages/admin";
 import PaperViewer from "@/pages/paper-viewer";
@@ -21,6 +25,7 @@ import PaperTesting from "@/pages/paper-testing";
 import AiAssistantTesting from "@/pages/ai-assistant-testing";
 import AdminResources from "@/pages/admin-resources";
 import AdminProcessing from "@/pages/admin-processing";
+import AdminUsers from "@/pages/admin-users";
 import TopicMapManager from "@/pages/topic-map-manager";
 import NotFound from "@/pages/not-found";
 
@@ -49,8 +54,13 @@ function Router() {
       <Route path="/notes" component={Notes} />
       <Route path="/questions" component={Questions} />
       <Route path="/ai" component={AiTutor} />
+      <Route path="/question-solver" component={QuestionSolver} />
+      <Route path="/notes-generator" component={NotesGenerator} />
+      <Route path="/paper-checker" component={PaperChecker} />
+      <Route path="/revision-planner" component={RevisionPlanner} />
       <Route path="/progress" component={Progress} />
       <Route path="/admin" component={Admin} />
+      <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/testing" component={PaperTesting} />
       <Route path="/admin/ai-testing" component={AiAssistantTesting} />
       <Route path="/admin/resources" component={AdminResources} />

@@ -3,8 +3,13 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { apiLimiter } from "./middleware/rate-limit";
 
 const app: Express = express();
+
+// Behind Netlify's proxy the real client IP arrives in X-Forwarded-For; trust a
+// single proxy hop so rate limiting keys on the client rather than the proxy.
+app.set("trust proxy", 1);
 const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:5173,https://parhais.netlify.app")
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
@@ -34,6 +39,6 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use("/api", router);
+app.use("/api", apiLimiter, router);
 
 export default app;

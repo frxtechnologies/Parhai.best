@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
+import { aiLimiter } from "../middleware/rate-limit";
 import { detectRequestedTopic, expandSearchTerms, finalizeGroundedAnswer, formatCitation, formatQuestionResultSummary, rankEvidence } from "../services/rag-utils";
 import { assistantModeFor, cambridgeTeacherName, finalizeTeacherAnswer, requestedOutsideSubject } from "../services/teacher-mode";
 import { screenshotMode } from "../services/question-screenshots";
@@ -254,7 +255,7 @@ async function retrieveSources(client: SupabaseClient, input: z.infer<typeof Req
   return { sources: rankEvidence(results, terms, 12), matchedPapers: papers.data ?? [], matchedQuestions: questions.data ?? [], extractedQuestionCount: questionCount.count ?? 0 };
 }
 
-router.post("/ai-assistant", requireUser, async (req, res): Promise<void> => {
+router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<void> => {
   try {
     const parsed = RequestBody.safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid AI request." }); return; }

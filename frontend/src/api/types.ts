@@ -157,6 +157,132 @@ export interface OnboardInput {
   subjectIds: number[];
 }
 
+export type NoteType =
+  | "summary"
+  | "detailed"
+  | "flashcards"
+  | "definitions"
+  | "formula_sheet"
+  | "checklist"
+  | "mind_map"
+  | "memory_tricks"
+  | "last_minute";
+
+export interface GeneratedNotes {
+  subject: { id: number; name: string; code: string };
+  topic: string;
+  noteType: NoteType;
+  markdown: string;
+  grounded: boolean;
+  sources: Array<{ index: number; type: string; reference: string }>;
+}
+
+export interface ExtractedQuestion {
+  questionText: string;
+  subjectGuess: string | null;
+  paper: string | null;
+  session: string | null;
+  variant: string | null;
+  questionNumber: string | null;
+  marks: number | null;
+  topic: string | null;
+  subtopic: string | null;
+  hasEquations: boolean;
+  hasDiagram: boolean;
+  confidence: number;
+}
+
+export interface SolvedQuestion {
+  needsRetake: boolean;
+  extraction: ExtractedQuestion;
+  answer?: string;
+  sources?: Array<{ index: number; type: string; reference: string }>;
+  matchedSubject?: { id: number; name: string; code: string } | null;
+  usedGroundedSources?: boolean;
+}
+
+export interface MarkedQuestion {
+  questionNumber: string;
+  topic: string | null;
+  awardedMarks: number;
+  totalMarks: number;
+  whatWentWell: string;
+  missingPoints: string;
+  modelAnswer: string;
+}
+
+export interface TopicPerformance {
+  topic: string;
+  awarded: number;
+  total: number;
+  ratio: number;
+}
+
+export interface PaperReport {
+  questions: MarkedQuestion[];
+  totalAwarded: number;
+  totalPossible: number;
+  percentage: number;
+  grade: string;
+  strongTopics: string[];
+  weakTopics: string[];
+  topicBreakdown: TopicPerformance[];
+  usedGroundedSources: boolean;
+  sources: Array<{ index: number; type: string; reference: string }>;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string | null;
+  name: string | null;
+  level: string | null;
+  isAdmin: boolean;
+  createdAt: string;
+  lastSignInAt: string | null;
+}
+
+export type RevisionActivity = "learn" | "practice" | "review" | "mock_paper";
+export type RevisionPhase = "foundation" | "practice" | "final_review";
+export type PreparationLevel = "beginner" | "intermediate" | "advanced";
+
+export interface RevisionPlanInput {
+  examDate: string;
+  subjects: string[];
+  weakTopics?: string[];
+  hoursPerDay?: number;
+  studyDaysPerWeek?: number;
+  preparationLevel?: PreparationLevel;
+  includeGuidance?: boolean;
+}
+
+export interface RevisionSession {
+  subject: string;
+  focus: string;
+  activity: RevisionActivity;
+  minutes: number;
+}
+
+export interface RevisionDay {
+  date: string;
+  label: string;
+  phase: RevisionPhase;
+  isRestDay: boolean;
+  sessions: RevisionSession[];
+  totalMinutes: number;
+}
+
+export interface RevisionPlan {
+  examDate: string;
+  daysUntilExam: number;
+  totalDays: number;
+  studyDays: number;
+  subjects: string[];
+  weakTopics: string[];
+  days: RevisionDay[];
+  summary: string;
+  aiGuidance?: string;
+}
+
 export interface ListSubjectsParams {
   level?: "O_LEVEL" | "A_LEVEL";
 }

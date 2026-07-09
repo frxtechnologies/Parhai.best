@@ -111,6 +111,21 @@ http://localhost:5173/**
 https://YOUR_FRONTEND_DOMAIN/**
 ```
 
+### Google Sign-In (optional)
+
+The login page shows a "Continue with Google" button. It only works once the
+Google provider is enabled in Supabase:
+
+1. In Google Cloud Console, create an OAuth 2.0 Client ID (Web application).
+2. Add the Supabase callback as an authorized redirect URI:
+   `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`.
+3. In the Supabase Dashboard, go to Authentication → Providers → Google, enable
+   it, and paste the Client ID and Client Secret.
+4. Ensure the redirect URLs above include `/dashboard` (the app returns users
+   there after Google sign-in).
+
+Until this is configured, the button will bounce back to the login page.
+
 The application uses:
 
 - `signUp` with email and password

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { requireAdmin } from "../middleware/auth";
+import { uploadLimiter } from "../middleware/rate-limit";
 import { ingestPhysics2024PaperOne } from "../services/physics-ingestion";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import pdf from "pdf-parse/lib/pdf-parse.js";
@@ -26,6 +27,7 @@ const Fields = z.object({
 router.post(
   "/ingest/physics-2024-paper-1",
   requireAdmin,
+  uploadLimiter,
   upload.fields([
     { name: "paper", maxCount: 1 },
     { name: "markingScheme", maxCount: 1 },
