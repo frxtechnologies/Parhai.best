@@ -72,12 +72,12 @@ export function Sidebar() {
         style={{ animationDelay: `${delay}ms` }}
       >
         {isActive && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-gradient-to-b from-cyan-400 to-teal-400 rounded-r-full shadow-[0_0_8px_rgba(6,182,212,0.7)]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-gradient-to-b from-indigo-400 to-violet-400 rounded-r-full shadow-[0_0_8px_rgba(99,102,241,0.7)]" />
         )}
         <item.icon
           className={cn(
             "h-[17px] w-[17px] shrink-0 transition-colors duration-200",
-            isActive ? "text-cyan-400" : "text-slate-500 group-hover:text-slate-300"
+            isActive ? "text-indigo-400" : "text-slate-500 group-hover:text-slate-300"
           )}
         />
         <span className="truncate">{item.label}</span>
@@ -125,7 +125,7 @@ export function Sidebar() {
           {/* User row */}
           <div className="flex items-center gap-3">
             <div className="relative shrink-0">
-              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-400 to-teal-500 flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-cyan-500/25">
+              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-indigo-500/25">
                 {user.name.charAt(0)}
               </div>
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#07101F]" />
