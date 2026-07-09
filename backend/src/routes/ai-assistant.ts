@@ -179,15 +179,21 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     client.from("topic_maps").select("id", { count: "exact", head: true }).eq("subject_code", subject.code).eq("status", "approved"),
   ]);
   let semantic: { data: any[] | null; error: { message?: string } | null } = { data: [], error: null };
+  let semanticQ: { data: any[] | null; error: { message?: string } | null } = { data: [], error: null };
   if (isAiConfigured()) {
     try {
+      // Embed the query ONCE and share it across both vector searches (cost discipline).
       const queryEmbedding = await generateQueryEmbedding(input.message);
-      semantic = await client.rpc("match_ai_chunks", {
-        query_embedding: `[${queryEmbedding.join(",")}]`,
-        match_subject_id: subject.id,
-        match_count: 12,
-        match_threshold: 0.12,
-      });
+      const embStr = `[${queryEmbedding.join(",")}]`;
+      // Topic-first semantic search over clean questions (F18): filter by the resolved
+      // taxonomy topic before vector ranking. Exact subtopic when confident, parent
+      // section when expanded, unfiltered otherwise (still semantic over questions).
+      const matchTopicId = retrievalStrategy === "taxonomy_exact" ? taxonomyTopicId : null;
+      const matchPrefix = retrievalStrategy === "taxonomy_parent" && taxonomyTopicId ? `${parentTopicId(taxonomyTopicId)}.%` : null;
+      [semantic, semanticQ] = await Promise.all([
+        client.rpc("match_ai_chunks", { query_embedding: embStr, match_subject_id: subject.id, match_count: 12, match_threshold: 0.12 }),
+        client.rpc("match_questions", { query_embedding: embStr, match_subject_id: subject.id, match_count: 12, match_threshold: 0.15, match_taxonomy_topic_id: matchTopicId, match_taxonomy_prefix: matchPrefix }),
+      ]);
     } catch {
       // Keyword and exact question_index retrieval remain available.
     }
@@ -195,6 +201,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   if (resources.error) throw resources.error;
   if (chunks.error) throw chunks.error;
   if (semantic.error) throw semantic.error;
+  if (semanticQ.error) throw semanticQ.error;
   if (indexed.error) throw indexed.error;
   const keywordSources: SourceResult[] = (chunks.data ?? []).map((chunk) => {
     const resource = Array.isArray(chunk.resources) ? chunk.resources[0] : chunk.resources;
@@ -211,6 +218,17 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     content: chunk.content.slice(0, 5000),
     metadata: { ...chunk.metadata, resourceId: chunk.resource_id, chunkIndex: chunk.chunk_index, similarity: chunk.similarity },
     }));
+  // Topic-filtered semantic question hits (F18) — same shape as keyword question hits.
+  const semanticQuestionSources: SourceResult[] = (semanticQ.data ?? [])
+    .filter((row: { year: number | null }) => !year || Number(row.year) === year)
+    .map((row: any) => ({
+      sourceType: "question" as const,
+      id: row.id,
+      paperId: null,
+      reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
+      content: `Question: ${row.clean_question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
+      metadata: { resourceId: row.resource_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, taxonomyTopicId: row.taxonomy_topic_id, confidence: row.confidence, needsReview: row.needs_review, difficulty: row.difficulty, marks: row.total_marks ?? row.marks, questionText: row.display_question_text ?? row.clean_question_text, answerText: row.answer_text, similarity: row.similarity, screenshotUrl: null, screenshotStatus: "not_generated", sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
+    }));
   const rawQuestionSources: SourceResult[] = (indexed.data ?? []).map((row) => ({
     sourceType: "question",
     id: row.id,
@@ -219,7 +237,9 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     content: `Question: ${row.clean_question_text ?? row.display_question_text ?? row.question_text}${row.answer_text ? `\nMarking scheme answer: ${row.answer_text}` : ""}`.slice(0, 5000),
     metadata: { resourceId: row.resource_id, legacyQuestionId: row.legacy_source_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic, confidence: row.confidence, needsReview: row.needs_review, difficulty: row.difficulty, marks: row.total_marks ?? row.marks, questionText: row.display_question_text ?? row.clean_question_text ?? row.question_text, answerText: row.answer_text, screenshotUrl: screenshotMode() === "on_demand" ? null : row.question_screenshot_url, screenshotStatus: screenshotMode() === "on_demand" ? "not_generated" : row.screenshot_status, sourcePage: row.source_page, bbox: row.bbox, filePath: (Array.isArray(row.resources) ? row.resources[0] : row.resources)?.storage_path, sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant },
   }));
-  const deduplicated = deduplicateQuestions(rawQuestionSources);
+  // Keyword hits first so their richer metadata (screenshots, bbox, file path) wins
+  // over the leaner semantic hit when the two collapse to the same question.
+  const deduplicated = deduplicateQuestions([...rawQuestionSources, ...semanticQuestionSources]);
   const questionSources = deduplicated.unique;
   const seen = new Set<string>();
   const uniqueSources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
@@ -229,7 +249,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
     return true;
   });
   const sources = rankEvidence(uniqueSources, terms, 12);
-  const topSimilarity = semanticSources.reduce((max, s) => Math.max(max, Number(s.metadata.similarity ?? 0)), 0);
+  const topSimilarity = [...semanticSources, ...semanticQuestionSources].reduce((max, s) => Math.max(max, Number(s.metadata.similarity ?? 0)), 0);
   return {
     resources: resources.data ?? [], sources,
     indexedQuestionCount: indexed.data?.length ?? 0,

@@ -233,10 +233,25 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     }
     const { error: clearQuestionError } = await client.from("question_index").delete().eq("resource_id", resource.id);
     if (clearQuestionError) throw clearQuestionError;
-    const { data: savedQuestions, error: questionError } = await client.from("question_index").insert(numbered.map((question) => {
+    const cleanedTexts = numbered.map((question) => cleanQuestionText(question.text));
+    const qualities = cleanedTexts.map((text) => questionTextQuality(text));
+    // Embed eligible questions at ingestion so match_questions works immediately (F18).
+    // Cost-aware: only good/acceptable rows are embedded (failed/needs_review are excluded
+    // from retrieval anyway). Best-effort — the embed-question-index backfill fills any gaps.
+    const questionEmbeddings = new Map<number, number[]>();
+    const eligibleIndexes = qualities.flatMap((status, i) => (status === "good" || status === "acceptable") ? [i] : []);
+    if (eligibleIndexes.length) {
+      try {
+        const embs = await generateDocumentEmbeddings(eligibleIndexes.map((i) => cleanedTexts[i]!.slice(0, 2000)));
+        eligibleIndexes.forEach((i, k) => questionEmbeddings.set(i, embs[k]!));
+      } catch {
+        // Non-fatal: leave embeddings null; the backfill script populates them later.
+      }
+    }
+    const { data: savedQuestions, error: questionError } = await client.from("question_index").insert(numbered.map((question, qi) => {
       const tag = classified.get(question.number);
-      const cleanedText = cleanQuestionText(question.text);
-      const textQuality = questionTextQuality(cleanedText);
+      const cleanedText = cleanedTexts[qi]!;
+      const textQuality = qualities[qi]!;
       return {
         subject_id: resource.subject_id,
         resource_id: resource.id,
@@ -266,6 +281,8 @@ export async function processResourceContent(client: SupabaseClient, resource: P
         tagging_note: tag?.note ?? "No topic map found for this subject.",
         topic_classified: Boolean(tag && !tag.needsReview && tag.confidence >= 0.85),
         student_verified: textQuality !== "needs_review" && textQuality !== "failed" && Boolean(tag && !tag.needsReview && tag.confidence >= 0.60),
+        embedding: questionEmbeddings.has(qi) ? `[${questionEmbeddings.get(qi)!.join(",")}]` : null,
+        embedding_model: questionEmbeddings.has(qi) ? AI_EMBEDDING_MODEL : null,
       };
     })).select("id,question_number");
     if (questionError) throw questionError;
