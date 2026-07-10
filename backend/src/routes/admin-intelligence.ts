@@ -15,7 +15,7 @@ router.get("/admin/intelligence/metrics", requireAdmin, async (req, res): Promis
   const days = Math.min(Math.max(Number(req.query.days ?? 7), 1), 90);
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
 
-  const [telemetry, feedback] = await Promise.all([
+  const [telemetry, feedback, ledger] = await Promise.all([
     supabaseAdmin
       .from("ai_retrieval_telemetry")
       .select("retrieval_strategy,topic_method,resolved_topic_id,sources_returned,question_sources,top_similarity,provider_ok,latency_ms,legacy_sources_returned,legacy_sources_cited")
@@ -27,10 +27,17 @@ router.get("/admin/intelligence/metrics", requireAdmin, async (req, res): Promis
       .select("rating,reason")
       .gte("created_at", since)
       .limit(5000),
+    supabaseAdmin
+      .from("ai_interaction_ledger")
+      .select("verification_status,model_provider,model_name,training_export_status")
+      .eq("subject_code", subjectCode)
+      .gte("created_at", since)
+      .limit(10000),
   ]);
 
   if (telemetry.error) { res.status(500).json({ error: telemetry.error.message }); return; }
   if (feedback.error) { res.status(500).json({ error: feedback.error.message }); return; }
+  if (ledger.error) { res.status(500).json({ error: ledger.error.message }); return; }
 
   const rows = telemetry.data ?? [];
   const total = rows.length;
@@ -53,8 +60,24 @@ router.get("/admin/intelligence/metrics", requireAdmin, async (req, res): Promis
   const positive = fb.filter((f) => f.rating === 1).length;
   const negative = fb.filter((f) => f.rating === -1).length;
 
+  // Interaction Ledger (Phase A): the data-flywheel view — how much training-grade
+  // material is accumulating, by verification state and teacher (model) provenance.
+  const led = ledger.data ?? [];
+  const ledgerTally = (key: string) => led.reduce<Record<string, number>>((acc, r) => {
+    const v = String((r as Record<string, unknown>)[key] ?? "unknown");
+    acc[v] = (acc[v] ?? 0) + 1;
+    return acc;
+  }, {});
+  const goldReady = led.filter((l) => (l.verification_status === "teacher_verified" || l.verification_status === "student_positive") && l.training_export_status === "pending").length;
+
   res.json({
     subjectCode,
+    interactionLedger: {
+      total: led.length,
+      verificationBreakdown: ledgerTally("verification_status"),
+      teacherBreakdown: ledgerTally("model_name"),
+      goldReadyForExport: goldReady,
+    },
     windowDays: days,
     totalQueries: total,
     topicResolutionRate: total ? topicResolved / total : 0,

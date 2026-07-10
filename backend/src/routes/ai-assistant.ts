@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
+import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, getAiStatus, isAiConfigured } from "../lib/ai-service";
 import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId, hasTaxonomy } from "../services/taxonomy-classifier";
 import { logRetrievalTelemetry } from "../services/intelligence-telemetry";
+import { logInteraction, recordLedgerVerification } from "../services/interaction-ledger";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 import { aiLimiter } from "../middleware/rate-limit";
@@ -512,7 +513,34 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       : "";
     const presentedAnswer = questionListRequest ? questionSearchAnswer(subject, retrieved, input.message) : grounded.answer;
     recordTelemetry(true, sources.length, displayedQuestions, legacyCited);
-    res.json({ answer: [resultSummary, presentedAnswer].filter(Boolean).join("\n\n"), sources, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
+    // Interaction Ledger (Phase A): capture this grounded generation as a training
+    // candidate, tagged with model provenance. Returns an id the client attaches
+    // feedback to. Best-effort: a null id never breaks the response.
+    const ai = getAiStatus();
+    const interactionId = await logInteraction(client, {
+      userId: res.locals.user.id,
+      subjectId: subject.id,
+      subjectCode: subject.code,
+      mode,
+      modelProvider: ai.provider,
+      modelName: ai.model,
+      queryText: input.message,
+      resolvedTopicId: resourceRetrieval.taxonomyTopicId,
+      retrievalStrategy: resourceRetrieval.retrievalStrategy,
+      evidence: retrieved.slice(0, 12).map((source) => ({
+        sourceType: source.sourceType,
+        id: source.id,
+        reference: source.reference,
+        similarity: typeof source.metadata.similarity === "number" ? source.metadata.similarity : null,
+        questionNumber: (source.metadata.questionNumber as string | undefined) ?? null,
+        topic: (source.metadata.topic as string | undefined) ?? null,
+      })),
+      answerText: grounded.answer,
+      citations: sources.map((source) => source.reference),
+      answerLength: input.answerLength,
+      latencyMs: Date.now() - startedAt,
+    });
+    res.json({ answer: [resultSummary, presentedAnswer].filter(Boolean).join("\n\n"), sources, interactionId, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
     req.log.error({ error }, "AI assistant request failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "AI assistant request failed." });
@@ -521,6 +549,7 @@ Do not create a separate Sources section; Parhai renders verified sources below 
 
 const FeedbackBody = z.object({
   telemetryId: z.coerce.number().int().positive().nullable().optional(),
+  ledgerId: z.coerce.number().int().positive().nullable().optional(),
   subjectId: z.coerce.number().int().positive(),
   rating: z.union([z.literal(1), z.literal(-1)]),
   reason: z.enum(["helpful", "wrong_topic", "hallucinated", "no_sources", "incomplete", "other"]).optional(),
@@ -534,9 +563,10 @@ router.post("/ai/feedback", requireUser, async (req, res): Promise<void> => {
     if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid feedback." }); return; }
     const token = req.header("authorization")?.replace(/^Bearer\s+/i, "");
     const client = createUserClient(token!);
-    const { telemetryId, subjectId, rating, reason, comment } = parsed.data;
+    const { telemetryId, ledgerId, subjectId, rating, reason, comment } = parsed.data;
     const { error } = await client.from("ai_answer_feedback").insert({
       telemetry_id: telemetryId ?? null,
+      ledger_id: ledgerId ?? null,
       user_id: res.locals.user.id,
       subject_id: subjectId,
       rating,
@@ -544,6 +574,8 @@ router.post("/ai/feedback", requireUser, async (req, res): Promise<void> => {
       comment: comment ?? null,
     });
     if (error) { res.status(500).json({ error: error.message }); return; }
+    // Promote the ledger row's verification from the student's rating (Phase A→B loop).
+    if (ledgerId) await recordLedgerVerification(client, ledgerId, rating === 1 ? "student_positive" : "student_negative");
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "Could not save feedback." });
