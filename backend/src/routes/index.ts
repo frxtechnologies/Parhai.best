@@ -13,6 +13,7 @@ import paperCheckerRouter from "./paper-checker";
 import adminTopicReviewRouter from "./admin-topic-review";
 import adminIntelligenceRouter from "./admin-intelligence";
 import adminLedgerRouter from "./admin-ledger";
+import knowledgeRouter from "./knowledge";
 
 const router: IRouter = Router();
 
@@ -30,5 +31,6 @@ router.use(paperCheckerRouter);
 router.use(adminTopicReviewRouter);
 router.use(adminIntelligenceRouter);
 router.use(adminLedgerRouter);
+router.use(knowledgeRouter);
 
 export default router;
