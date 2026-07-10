@@ -12,6 +12,7 @@ import notesGeneratorRouter from "./notes-generator";
 import paperCheckerRouter from "./paper-checker";
 import adminTopicReviewRouter from "./admin-topic-review";
 import adminIntelligenceRouter from "./admin-intelligence";
+import adminLedgerRouter from "./admin-ledger";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(notesGeneratorRouter);
 router.use(paperCheckerRouter);
 router.use(adminTopicReviewRouter);
 router.use(adminIntelligenceRouter);
+router.use(adminLedgerRouter);
 
 export default router;

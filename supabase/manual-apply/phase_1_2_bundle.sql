@@ -475,3 +475,12 @@ create policy "ledger_update_own" on public.ai_interaction_ledger
 alter table public.ai_answer_feedback
   add column if not exists ledger_id bigint references public.ai_interaction_ledger(id) on delete set null;
 
+
+-- ===== 20260709000008_ledger_verification.sql =====
+-- Phase B: verification audit for the Interaction Ledger.
+-- Records WHO promoted a training candidate and WHEN, so gold promotion is
+-- auditable. verification_status / quality_score already exist (Phase A).
+alter table public.ai_interaction_ledger
+  add column if not exists verified_by uuid references auth.users(id) on delete set null,
+  add column if not exists verified_at timestamptz;
+

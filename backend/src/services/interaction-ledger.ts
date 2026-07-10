@@ -34,6 +34,7 @@ export type InteractionRecord = {
   citations: string[];
   answerLength: string;
   latencyMs: number;
+  qualityScore: number;
 };
 
 export async function logInteraction(client: SupabaseClient, record: InteractionRecord): Promise<number | null> {
@@ -55,6 +56,7 @@ export async function logInteraction(client: SupabaseClient, record: Interaction
         citations: record.citations.slice(0, 24),
         answer_length: record.answerLength,
         latency_ms: record.latencyMs,
+        quality_score: record.qualityScore,
       })
       .select("id")
       .single();

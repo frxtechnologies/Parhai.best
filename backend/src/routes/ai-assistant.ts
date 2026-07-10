@@ -5,6 +5,7 @@ import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, getA
 import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId, hasTaxonomy } from "../services/taxonomy-classifier";
 import { logRetrievalTelemetry } from "../services/intelligence-telemetry";
 import { logInteraction, recordLedgerVerification } from "../services/interaction-ledger";
+import { computeInitialQuality } from "../services/gold-promotion";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 import { aiLimiter } from "../middleware/rate-limit";
@@ -539,6 +540,12 @@ Do not create a separate Sources section; Parhai renders verified sources below 
       citations: sources.map((source) => source.reference),
       answerLength: input.answerLength,
       latencyMs: Date.now() - startedAt,
+      qualityScore: computeInitialQuality({
+        mode,
+        citationsCount: grounded.citedIndexes.length,
+        topSimilarity: resourceRetrieval.topSimilarity || null,
+        retrievalStrategy: resourceRetrieval.retrievalStrategy,
+      }),
     });
     res.json({ answer: [resultSummary, presentedAnswer].filter(Boolean).join("\n\n"), sources, interactionId, ...(input.debug ? { retrievedResults: retrieved, diagnostics } : {}) });
   } catch (error) {
