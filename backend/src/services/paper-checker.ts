@@ -107,9 +107,10 @@ const EXTRACTION_PROMPT =
   "Preserve equations and working. If a question number is unclear, infer it from order.";
 
 const MARKING_SYSTEM =
-  "You are a strict but fair Cambridge examiner. Mark each answer ONLY against the official marking-scheme points provided. " +
-  "Never invent marking criteria; if no scheme is available for a question, set totalMarks to your best estimate from the " +
-  "answer's marks cue and explain the uncertainty. Award marks exactly per the criteria. Reply ONLY with strict JSON.";
+  "You are a strict but fair Cambridge examiner. Mark each answer ONLY against the official marking-scheme criteria provided " +
+  "(shown as a numbered 'Marking criteria' list). Award the stated marks for EACH criterion the student's answer satisfies — " +
+  "accept the listed alternatives — and award nothing for points not in the scheme. Never invent criteria. If no scheme is " +
+  "available for a question, set totalMarks from the answer's marks cue and flag the uncertainty. Reply ONLY with strict JSON.";
 
 type ExtractedAnswer = { questionNumber: string; answerText: string; topic: string | null };
 

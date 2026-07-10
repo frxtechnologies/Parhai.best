@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expandSearchTerms, formatCitation, rankEvidence } from "./rag-utils";
 import { generateQueryEmbedding, isAiConfigured } from "../lib/ai-service";
+import { formatMarkingCriteria, type MarkingPoint } from "./mark-scheme-parser";
 
 /**
  * Centralised RAG retrieval shared by the AI features (Question Solver, Notes
@@ -68,7 +69,7 @@ export async function retrieveGroundedContext(
 
   // 1 & 2 & 5: verified questions (with their marking-scheme answers).
   let questionQuery = client.from("question_index")
-    .select("id,resource_id,question_number,topic,subtopic,difficulty,marks,total_marks,clean_question_text,display_question_text,question_text,answer_text,year,session,paper_code,variant,source_file,marking_scheme_link_status")
+    .select("id,resource_id,question_number,topic,subtopic,difficulty,marks,total_marks,clean_question_text,display_question_text,question_text,answer_text,marking_points,year,session,paper_code,variant,source_file,marking_scheme_link_status")
     .eq("subject_id", subject.id)
     // Eligibility = usable extracted text, not topic certainty or complete metadata (Phase 0, F9).
     .in("text_quality_status", ["good", "acceptable"])
@@ -94,17 +95,19 @@ export async function retrieveGroundedContext(
 
   for (const row of questions.data ?? []) {
     const hasScheme = Boolean(row.answer_text);
+    const markingPoints = (Array.isArray(row.marking_points) ? row.marking_points : []) as MarkingPoint[];
     const metadata = {
       resourceId: row.resource_id, questionNumber: row.question_number, topic: row.topic, subtopic: row.subtopic,
       difficulty: row.difficulty, marks: row.total_marks ?? row.marks, questionText: row.display_question_text ?? row.clean_question_text ?? row.question_text,
-      answerText: row.answer_text, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, sourceFile: row.source_file,
+      answerText: row.answer_text, markingPoints, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, sourceFile: row.source_file,
     };
+    const criteria = markingPoints.length ? `\nMarking criteria:\n${formatMarkingCriteria(markingPoints)}` : "";
     sources.push({
       sourceType: hasScheme ? "marking_scheme" : "question",
       id: row.id,
       priority: hasScheme ? 2 : 5,
       reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
-      content: `Question: ${row.clean_question_text ?? row.display_question_text ?? row.question_text}${row.answer_text ? `\nOfficial marking scheme: ${row.answer_text}` : ""}`.slice(0, 5000),
+      content: `Question: ${row.clean_question_text ?? row.display_question_text ?? row.question_text}${row.answer_text ? `\nOfficial marking scheme: ${row.answer_text}` : ""}${criteria}`.slice(0, 5000),
       metadata,
     });
   }
