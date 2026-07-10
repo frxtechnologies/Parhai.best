@@ -34,6 +34,17 @@ test("removes Cambridge page codes while preserving equations and marks", () => 
   assert.equal(cleaned, "Solve y = 2x + 3. [2]");
 });
 
+test("preserves maths and science notation (F13)", () => {
+  const a = cleanQuestionText("Calculate F when a = 2 m/s^2, F = ma, 3 × 10⁸.");
+  for (const token of ["m/s^2", "×", "10⁸"]) assert.ok(a.includes(token), `${token} missing in: ${a}`);
+  const b = cleanQuestionText("Show θ ≤ 90° and v ≥ 0; 2H₂ + O₂ → 2H₂O.");
+  for (const token of ["θ", "≤", "90°", "≥", "H₂", "→"]) assert.ok(b.includes(token), `${token} missing in: ${b}`);
+});
+
+test("still strips non-printable garbage (F13)", () => {
+  assert.equal(cleanQuestionText("Define work.�​"), "Define work.");
+});
+
 test("rejects instruction text and verifies real command-word questions", () => {
   assert.equal(questionTextQuality("INSTRUCTIONS Answer all questions. Write your name."), "failed");
   assert.equal(questionTextQuality("Calculate the refractive index of the glass block and show all working clearly. [3]"), "good");
