@@ -3,6 +3,7 @@ import pdf from "pdf-parse/lib/pdf-parse.js";
 import { generateDocumentEmbeddings, AI_EMBEDDING_MODEL } from "../lib/ai-service";
 import { createAndStoreQuestionScreenshots, screenshotMode } from "./question-screenshots";
 import { tagQuestionsForSubject } from "./topic-tagging";
+import { ocrPdfToText, looksScanned } from "./ocr-fallback";
 
 export type ProcessableResource = {
   id: number;
@@ -127,7 +128,14 @@ async function extractFileText(resource: ProcessableResource, buffer: Buffer) {
   const lowerName = resource.original_filename.toLowerCase();
   const isPdf = resource.file_type === "application/pdf" || lowerName.endsWith(".pdf");
   const isText = resource.file_type?.startsWith("text/") || lowerName.endsWith(".txt");
-  if (isPdf) return normalizeResourceText((await pdf(buffer)).text);
+  if (isPdf) {
+    const parsed = await pdf(buffer);
+    // Scanned / image-only PDFs have no usable text layer — fall back to vision OCR.
+    if (looksScanned(parsed.text, parsed.numpages)) {
+      return normalizeResourceText(await ocrPdfToText(buffer));
+    }
+    return normalizeResourceText(parsed.text);
+  }
   if (isText) return normalizeResourceText(buffer.toString("utf8"));
   throw new Error("Only PDF and plain-text processing is supported.");
 }
@@ -180,7 +188,7 @@ export async function processResourceContent(client: SupabaseClient, resource: P
     throw new Error(`Supabase Storage ${reason} for resource ${resource.id} (${resource.bucket}/${resource.storage_path}).`);
   }
   const extractedText = await extractFileText(resource, Buffer.from(await file.arrayBuffer()));
-  if (!extractedText) throw new Error("No text was extracted. This appears to be a scanned PDF and OCR is needed before it can be processed.");
+  if (!extractedText) throw new Error("No text could be extracted, even after OCR. The document may be blank, corrupt, or unreadable.");
   await onExtracted?.();
 
   const chunks = splitResourceChunks(extractedText);
