@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { requireAdmin } from "../middleware/auth";
 import { supabaseAdmin } from "../lib/supabase";
-import { isValidSubtopicId } from "../services/physics-taxonomy-classifier";
+import { isValidSubtopicId } from "../services/taxonomy-classifier";
 
 const router: IRouter = Router();
 

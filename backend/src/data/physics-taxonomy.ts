@@ -3,13 +3,8 @@
  * IDs are PERMANENT once questions reference them. Never remove or rename.
  */
 
-export type TaxonomyTopic = {
-  id: string;
-  parent_id: string | null;
-  level: 1 | 2;
-  name: string;
-  keywords: string[];
-};
+import type { TaxonomyTopic } from "./taxonomy-types";
+export type { TaxonomyTopic };
 
 export const PHYSICS_0625_TAXONOMY: TaxonomyTopic[] = [
   // ── Level 1: topic sections ───────────────────────────────────────────────

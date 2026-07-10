@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { requireAdmin } from "../middleware/auth";
 import { supabaseAdmin } from "../lib/supabase";
-import { getAllTaxonomyTopics, isValidSubtopicId, getSubtopicName } from "../services/physics-taxonomy-classifier";
+import { getAllTaxonomyTopics, isValidSubtopicId, getTopicName } from "../services/taxonomy-classifier";
 
 const router: IRouter = Router();
 
@@ -46,7 +46,7 @@ router.get("/admin/physics/needs-review", requireAdmin, async (req, res): Promis
     offset,
     questions: (data ?? []).map((row) => ({
       ...row,
-      taxonomy_topic_name: row.taxonomy_topic_id ? getSubtopicName(row.taxonomy_topic_id) : null,
+      taxonomy_topic_name: row.taxonomy_topic_id ? getTopicName(row.taxonomy_topic_id) : null,
     })),
   });
 });
@@ -82,7 +82,7 @@ router.patch("/admin/physics/classify/:questionId", requireAdmin, async (req, re
 
   if (error) { res.status(500).json({ error: error.message }); return; }
 
-  res.json({ ok: true, questionId, taxonomy_topic_id, name: getSubtopicName(taxonomy_topic_id) });
+  res.json({ ok: true, questionId, taxonomy_topic_id, name: getTopicName(taxonomy_topic_id) });
 });
 
 export default router;

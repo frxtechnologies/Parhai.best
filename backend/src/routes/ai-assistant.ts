@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, isAiConfigured } from "../lib/ai-service";
-import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId } from "../services/physics-taxonomy-classifier";
+import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId, hasTaxonomy } from "../services/taxonomy-classifier";
 import { logRetrievalTelemetry } from "../services/intelligence-telemetry";
 import { createUserClient } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
@@ -90,16 +90,16 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   const { year, yearFrom, yearTo, paperNumber, session, difficulty, terms } = getFilters(input.message, input.year);
   const requestedTopic = detectRequestedTopic(input.message, subject.code);
 
-  // ── Taxonomy-first topic resolution (physics 0625/5054 only) ─────────────
-  const isPhysics = ["0625", "5054"].includes(subject.code);
+  // ── Taxonomy-first topic resolution (any subject with a registered taxonomy) ─
+  const subjectHasTaxonomy = hasTaxonomy(subject.code);
   let taxonomyTopicId: string | null = null;
   let topicMethod: "ai" | "keyword" | "none" = "none";
-  if (isPhysics) {
+  if (subjectHasTaxonomy) {
     // Try AI classifier first; fall back to keyword match (fast, no network).
-    const aiTopic = await classifyQueryTopicId(input.message).catch(() => null);
+    const aiTopic = await classifyQueryTopicId(input.message, subject.code).catch(() => null);
     if (aiTopic) { taxonomyTopicId = aiTopic; topicMethod = "ai"; }
     else {
-      const kwTopic = keywordClassifyTopicId(input.message);
+      const kwTopic = keywordClassifyTopicId(input.message, subject.code);
       if (kwTopic) { taxonomyTopicId = kwTopic; topicMethod = "keyword"; }
     }
   }
@@ -131,7 +131,7 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   // For non-physics or when no topic resolved: fall through to ILIKE.
   let taxonomyFiltered = false;
   let retrievalStrategy: "taxonomy_exact" | "taxonomy_parent" | "topic_ilike" | "keyword_ilike" | "semantic_only" = "semantic_only";
-  if (isPhysics && taxonomyTopicId) {
+  if (subjectHasTaxonomy && taxonomyTopicId) {
     const exactQuery = indexedQuery.eq("taxonomy_topic_id", taxonomyTopicId);
     const { count: exactCount, error: countErr } = await client
       .from("question_index")

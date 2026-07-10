@@ -18,7 +18,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
-import { classifyQueryTopicId, keywordClassifyTopicId } from "../services/physics-taxonomy-classifier";
+import { classifyQueryTopicId, keywordClassifyTopicId } from "../services/taxonomy-classifier";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -45,9 +45,9 @@ type Case = { id: number; query_text: string; expected_topic_id: string | null }
 
 /** Mirror the live query-time resolution: AI classifier first, keyword fallback. */
 async function resolveTopic(query: string): Promise<{ topicId: string | null; method: "ai" | "keyword" | "none" }> {
-  const ai = await classifyQueryTopicId(query).catch(() => null);
+  const ai = await classifyQueryTopicId(query, SUBJECT).catch(() => null);
   if (ai) return { topicId: ai, method: "ai" };
-  const kw = keywordClassifyTopicId(query);
+  const kw = keywordClassifyTopicId(query, SUBJECT);
   if (kw) return { topicId: kw, method: "keyword" };
   return { topicId: null, method: "none" };
 }

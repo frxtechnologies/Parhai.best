@@ -23,7 +23,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { generateQueryEmbedding, isAiConfigured } from "../lib/ai-service";
-import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId } from "../services/physics-taxonomy-classifier";
+import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId } from "../services/taxonomy-classifier";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -56,7 +56,7 @@ async function subjectId(): Promise<number | null> {
 }
 
 async function resolveTopic(query: string): Promise<string | null> {
-  return (await classifyQueryTopicId(query).catch(() => null)) ?? keywordClassifyTopicId(query);
+  return (await classifyQueryTopicId(query, SUBJECT).catch(() => null)) ?? keywordClassifyTopicId(query, SUBJECT);
 }
 
 async function run() {
