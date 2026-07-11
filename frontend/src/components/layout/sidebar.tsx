@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Tags,
   Users,
+  Brain,
 } from "lucide-react";
 
 function cn(...classes: (string | boolean | undefined)[]) {
@@ -44,6 +45,7 @@ const NAV_ITEMS = [
 
 const ADMIN_ITEMS = [
   { label: "Admin Panel",          href: "/admin",               icon: ShieldCheck },
+  { label: "AI Knowledge Center",  href: "/admin/knowledge-center", icon: Brain },
   { label: "User Management",      href: "/admin/users",         icon: Users },
   { label: "Subjects & Resources", href: "/admin/resources",     icon: BookOpen },
   { label: "Processing Jobs",      href: "/admin/processing",    icon: RefreshCw },
