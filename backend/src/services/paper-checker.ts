@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { analyzeImages, generateAiAnswer, type VisionInput } from "../lib/ai-service";
 import { retrieveGroundedContext, type GroundedSource, type RetrievalSubject } from "./rag-retrieval";
+import { PRIVATE_SOURCE_PROMPT_RULE } from "./visibility-retrieval";
 
 /**
  * AI Paper Checker.
@@ -180,7 +181,9 @@ export async function checkPaperFromImages(
   const query = answers.map((a) => [a.topic, a.answerText].filter(Boolean).join(" ")).join(" ").slice(0, 2000);
   const sources = subject ? await retrieveGroundedContext(client, subject, query, { limit: 12 }) : [];
 
-  const marked = parseJson(await generateAiAnswer(MARKING_SYSTEM, buildMarkingPrompt(answers, sources)));
+  const hasPrivateSources = sources.some((s) => s.metadata.visibilityTier === "ai_private");
+  const markingSystem = hasPrivateSources ? `${MARKING_SYSTEM}\n\n${PRIVATE_SOURCE_PROMPT_RULE}` : MARKING_SYSTEM;
+  const marked = parseJson(await generateAiAnswer(markingSystem, buildMarkingPrompt(answers, sources)));
   const questions = normalizeMarkedQuestions((marked as { questions?: unknown }).questions);
   if (questions.length === 0) throw new Error("The marking step did not return any results. Please try again.");
 

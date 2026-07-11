@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateAiAnswer } from "../lib/ai-service";
 import { retrieveGroundedContext, type GroundedSource, type RetrievalSubject } from "./rag-retrieval";
+import { PRIVATE_SOURCE_PROMPT_RULE } from "./visibility-retrieval";
 
 /**
  * AI Notes Generator.
@@ -90,7 +91,9 @@ export async function generateNotes(client: SupabaseClient, input: GenerateNotes
   const subject = subjectRow as RetrievalSubject;
 
   const sources = await retrieveGroundedContext(client, subject, topic, { limit: 12 });
-  const markdown = await generateAiAnswer(SYSTEM, buildPrompt(subject, topic, input.noteType, sources));
+  const hasPrivateSources = sources.some((s) => s.metadata.visibilityTier === "ai_private");
+  const system = hasPrivateSources ? `${SYSTEM}\n\n${PRIVATE_SOURCE_PROMPT_RULE}` : SYSTEM;
+  const markdown = await generateAiAnswer(system, buildPrompt(subject, topic, input.noteType, sources));
 
   return {
     subject,

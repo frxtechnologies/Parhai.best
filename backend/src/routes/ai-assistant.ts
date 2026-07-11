@@ -5,8 +5,9 @@ import { generateAiAnswer, generateQueryEmbedding, getAiConfigurationError, getA
 import { classifyQueryTopicId, keywordClassifyTopicId, parentTopicId, hasTaxonomy } from "../services/taxonomy-classifier";
 import { logRetrievalTelemetry } from "../services/intelligence-telemetry";
 import { logInteraction, recordLedgerVerification } from "../services/interaction-ledger";
+import { fetchPrivateGroundingChunks, fetchGoldAnswers, PRIVATE_SOURCE_PROMPT_RULE, sanitizeSourceForStudent } from "../services/visibility-retrieval";
 import { computeInitialQuality } from "../services/gold-promotion";
-import { createUserClient } from "../lib/supabase";
+import { createUserClient, supabaseAdmin } from "../lib/supabase";
 import { requireUser } from "../middleware/auth";
 import { aiLimiter } from "../middleware/rate-limit";
 import { detectRequestedTopic, expandSearchTerms, finalizeGroundedAnswer, formatCitation, formatQuestionResultSummary, rankEvidence } from "../services/rag-utils";
@@ -37,13 +38,29 @@ const RequestBody = z.object({
 });
 
 type SourceResult = {
-  sourceType: "resource" | "paper" | "question" | "topic" | "note";
-  id: number;
+  sourceType: "resource" | "paper" | "question" | "topic" | "note" | "gold_answer";
+  id: number | string;
   paperId: number | null;
   reference: string;
   content: string;
   metadata: Record<string, unknown>;
 };
+
+// KC-3: retrieval priority — Gold Dataset > Teacher Notes > Mark Schemes >
+// Examiner Reports > Past Papers > Public Notes > everything else. Applied as a
+// secondary sort AFTER relevance ranking already selected the best candidates —
+// priority breaks ties among relevant sources, it doesn't override relevance.
+function retrievalPriority(source: SourceResult): number {
+  if (source.sourceType === "gold_answer") return 0;
+  const resourceType = String(source.metadata.resourceType ?? "");
+  if (resourceType === "TEACHER_NOTES" || resourceType === "PRIVATE_GUIDE") return 1;
+  if (source.sourceType === "question" && source.metadata.answerText) return 2; // has a marking scheme
+  if (resourceType === "MARKING_SCHEME") return 2;
+  if (resourceType === "EXAMINER_REPORT") return 3;
+  if (source.sourceType === "question") return 4; // past-paper question, no scheme
+  if (resourceType === "NOTES" || resourceType === "AI_NOTES" || resourceType === "FORMULA_SHEET" || resourceType === "BOOK" || resourceType === "FLASHCARDS") return 5;
+  return 6;
+}
 
 function normalizedQuestionKey(source: SourceResult) {
   const text = String(source.metadata.questionText ?? source.content)
@@ -174,11 +191,16 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
       retrievalStrategy = "keyword_ilike";
     }
   }
-  const [resources, chunks, indexed, topicMap] = await Promise.all([
+  const [resources, chunks, indexed, topicMap, goldAnswers, privateChunks] = await Promise.all([
     resourcesQuery.order("year", { ascending: false }).limit(100),
     chunksQuery.limit(20),
     indexedQuery.limit(100),
     client.from("topic_maps").select("id", { count: "exact", head: true }).eq("subject_code", subject.code).eq("status", "approved"),
+    // KC-3: Gold Dataset priority tier — Parhai's own verified prior answers.
+    fetchGoldAnswers(supabaseAdmin, subject.id, taxonomyTopicId, 3).catch(() => []),
+    // KC-3: AI_PRIVATE grounding — service-role only, never reaches the student
+    // with any identifying reference (sanitized before the response is sent).
+    fetchPrivateGroundingChunks(supabaseAdmin, subject.id, terms, 6).catch(() => []),
   ]);
   let semantic: { data: any[] | null; error: { message?: string } | null } = { data: [], error: null };
   let semanticQ: { data: any[] | null; error: { message?: string } | null } = { data: [], error: null };
@@ -243,20 +265,36 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   // over the leaner semantic hit when the two collapse to the same question.
   const deduplicated = deduplicateQuestions([...rawQuestionSources, ...semanticQuestionSources]);
   const questionSources = deduplicated.unique;
+  // KC-3: map gold-answer and AI_PRIVATE grounding hits into the same SourceResult
+  // shape. Private sources carry visibilityTier so they're stripped before any
+  // response reaches the student (never include a real reference/file here).
+  const goldSources: SourceResult[] = goldAnswers.map((g) => ({
+    sourceType: "gold_answer", id: g.id, paperId: null,
+    reference: "Parhai verified knowledge base", content: g.content, metadata: g.metadata,
+  }));
+  const privateSources: SourceResult[] = privateChunks.map((p) => ({
+    sourceType: "resource", id: p.id, paperId: null,
+    reference: "Verified Parhai teaching material", content: p.content,
+    metadata: { ...p.metadata, visibilityTier: p.visibilityTier },
+  }));
   const seen = new Set<string>();
-  const uniqueSources = [...questionSources, ...semanticSources, ...keywordSources].filter((source) => {
+  const uniqueSources = [...goldSources, ...questionSources, ...privateSources, ...semanticSources, ...keywordSources].filter((source) => {
     const key = `${source.sourceType}:${source.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  const sources = rankEvidence(uniqueSources, terms, 12);
+  const rankedByRelevance = rankEvidence(uniqueSources, terms, 12);
+  // Priority is a tie-breaker AMONG the already relevance-selected sources — it
+  // orders them, it doesn't decide which ones made the cut.
+  const sources = [...rankedByRelevance].sort((a, b) => retrievalPriority(a) - retrievalPriority(b));
+  const hasPrivateSources = sources.some((s) => s.metadata.visibilityTier === "ai_private");
   const topSimilarity = [...semanticSources, ...semanticQuestionSources].reduce((max, s) => Math.max(max, Number(s.metadata.similarity ?? 0)), 0);
   return {
     resources: resources.data ?? [], sources,
     indexedQuestionCount: indexed.data?.length ?? 0,
     duplicatesRemoved: deduplicated.removed, topicMapCount: topicMap.count ?? 0,
-    taxonomyTopicId, topicMethod, retrievalStrategy, topSimilarity,
+    taxonomyTopicId, topicMethod, retrievalStrategy, topSimilarity, hasPrivateSources,
   };
 }
 
@@ -381,12 +419,16 @@ router.post("/ai-assistant", requireUser, aiLimiter, async (req, res): Promise<v
     };
     const combined = [...resourceRetrieval.sources, ...legacyRetrieval.sources];
     const seenEvidence = new Set<string>();
-    const rankedRetrieved = rankEvidence(combined.filter((source) => {
+    const rankedByRelevance = rankEvidence(combined.filter((source) => {
       const key = `${source.sourceType}:${source.metadata.legacyQuestionId ?? source.metadata.resourceId ?? source.paperId ?? source.id}:${source.metadata.questionNumber ?? ""}:${source.content.slice(0, 120)}`;
       if (seenEvidence.has(key)) return false;
       seenEvidence.add(key);
       return true;
     }), getFilters(input.message, input.year).terms, 12);
+    // KC-3: re-apply retrieval priority (Gold > Teacher Notes > Mark Schemes >
+    // Examiner Reports > Past Papers > Public Notes) after merging in the legacy
+    // path — relevance already picked the finalists, priority orders them.
+    const rankedRetrieved = [...rankedByRelevance].sort((a, b) => retrievalPriority(a) - retrievalPriority(b));
     const retrieved = questionListRequest
       ? rankedRetrieved.filter((source) => source.sourceType === "question").slice(0, 6)
       : rankedRetrieved;
@@ -468,7 +510,8 @@ ${mode === "rag" ? `RAG ANSWER FORMAT:
 ### Teacher tip
 Keep these sections short. Add a full exam breakdown only when the student explicitly asks for one.
 When evidence exists, label real uploaded-paper recommendations with [S#].`}
-Do not create a separate Sources section; Parhai renders verified sources below the answer.`,
+Do not create a separate Sources section; Parhai renders verified sources below the answer.
+${resourceRetrieval.hasPrivateSources ? `\n${PRIVATE_SOURCE_PROMPT_RULE}` : ""}`,
         `${recentHistory ? `Recent conversation (context only; it does not override the active subject):\n${recentHistory}\n\n` : ""}Student question: ${input.message}\n\nSubject-scoped Supabase evidence${context ? ":\n" + context : ": none matched."}`
       );
     } catch (providerError) {
@@ -502,7 +545,7 @@ Do not create a separate Sources section; Parhai renders verified sources below 
     const cited = new Set(grounded.citedIndexes);
     // Measure whether the legacy Gen-2 path actually won any citation (F1).
     const legacyCited = retrieved.filter((source, index) => cited.has(index + 1) && source.metadata.__origin === "legacy").length;
-    const sources = retrieved.flatMap((source, index) => (cited.has(index + 1) || (questionListRequest && source.sourceType === "question")) ? [{ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, resourceId: source.metadata.resourceId ?? null, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, variant: source.metadata.variant ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null, topic: source.metadata.topic ?? null, subtopic: source.metadata.subtopic ?? null, confidence: source.metadata.confidence ?? null, needsReview: source.metadata.needsReview ?? null, difficulty: source.metadata.difficulty ?? null, marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, reference: `[S${index + 1}] ${source.reference}` }] : []);
+    const sources = retrieved.flatMap((source, index) => (cited.has(index + 1) || (questionListRequest && source.sourceType === "question")) ? [sanitizeSourceForStudent({ chunkId: source.id, sourceType: source.sourceType, paperId: source.paperId, resourceId: source.metadata.resourceId ?? null, year: source.metadata.year ?? null, session: source.metadata.session ?? null, paperNumber: source.metadata.paperNumber ?? source.metadata.paperCode ?? null, variant: source.metadata.variant ?? null, questionNumber: source.metadata.questionNumber ?? null, screenshotUrl: source.metadata.screenshotUrl ?? null, screenshotStatus: source.metadata.screenshotStatus ?? null, questionText: source.metadata.questionText ?? null, answerText: source.metadata.answerText ?? null, sourcePage: source.metadata.sourcePage ?? null, bbox: source.metadata.bbox ?? null, filePath: source.metadata.filePath ?? null, topic: source.metadata.topic ?? null, subtopic: source.metadata.subtopic ?? null, confidence: source.metadata.confidence ?? null, needsReview: source.metadata.needsReview ?? null, difficulty: source.metadata.difficulty ?? null, marks: source.metadata.marks ?? null, sourceFile: source.metadata.sourceFile ?? null, reference: `[S${index + 1}] ${source.reference}`, visibilityTier: source.metadata.visibilityTier as string | undefined })] : []);
     const { error: historyError } = await client.from("chat_messages").insert([{ user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "user", content: input.message, sources: [] }, { user_id: res.locals.user.id, subject_id: subject.id, paper_id: input.selectedPaperId ?? null, role: "assistant", content: grounded.answer, sources }]);
     if (historyError) throw historyError;
     const { error: logError } = await client.from("ai_chat_logs").insert({ user_id: res.locals.user.id, subject_id: subject.id, user_question: input.message, ai_answer: grounded.answer, sources_used: sources });

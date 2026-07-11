@@ -2,22 +2,30 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { expandSearchTerms, formatCitation, rankEvidence } from "./rag-utils";
 import { generateQueryEmbedding, isAiConfigured } from "../lib/ai-service";
 import { formatMarkingCriteria, type MarkingPoint } from "./mark-scheme-parser";
+import { fetchGoldAnswers, fetchPrivateGroundingChunks } from "./visibility-retrieval";
+// Lazy-imported inside retrieveGroundedContext (not at module scope): this file is
+// imported by paper-checker.ts / notes-generator.ts and their unit tests, and
+// ../lib/supabase throws eagerly without env vars — a top-level import here would
+// break every test that merely imports this module without ever calling it.
 
 /**
  * Centralised RAG retrieval shared by the AI features (Question Solver, Notes
  * Generator, Paper Checker). It queries the canonical Cambridge content tables
- * (question_index + ai_chunks over resources) and ranks results in the required
+ * (question_index + ai_chunks over resources) and ranks results in the KC-3
  * priority order:
  *
- *   1. Linked question        (question_index, verified)
- *   2. Official marking scheme (answer_text on the linked question, MARKING_SCHEME chunks)
- *   3. Examiner report         (EXAMINER_REPORT resource chunks)
- *   4. Topic notes             (NOTES resource chunks)
- *   5. Similar questions       (other verified questions)
- *   6. Syllabus                (SYLLABUS resource chunks)
+ *   0. Gold Dataset      (Parhai's own teacher-verified prior answers)
+ *   1. Teacher Notes      (TEACHER_NOTES / PRIVATE_GUIDE resources)
+ *   2. Mark scheme         (answer_text on the linked question, MARKING_SCHEME chunks)
+ *   3. Examiner report      (EXAMINER_REPORT resource chunks)
+ *   4. Past paper question   (question_index, verified, no scheme)
+ *   5. Public notes            (NOTES/AI_NOTES/FORMULA_SHEET/BOOK/FLASHCARDS)
+ *   6. Syllabus / other
  *
  * Callers combine these grounded sources with the LLM, which must cite them and
- * never answer from general knowledge when verified sources exist.
+ * never answer from general knowledge when verified sources exist. Sources
+ * carrying metadata.visibilityTier === 'ai_private' must NEVER be shown to a
+ * student verbatim — see visibility-retrieval.ts for the enforcement contract.
  */
 
 export type GroundedSourceType =
@@ -26,7 +34,8 @@ export type GroundedSourceType =
   | "examiner_report"
   | "note"
   | "syllabus"
-  | "resource";
+  | "resource"
+  | "gold_answer";
 
 export interface GroundedSource {
   sourceType: GroundedSourceType;
@@ -44,9 +53,15 @@ export interface RetrievalSubject {
 }
 
 const RESOURCE_TYPE_PRIORITY: Record<string, { type: GroundedSourceType; priority: number }> = {
+  TEACHER_NOTES: { type: "note", priority: 1 },
+  PRIVATE_GUIDE: { type: "note", priority: 1 },
   MARKING_SCHEME: { type: "marking_scheme", priority: 2 },
   EXAMINER_REPORT: { type: "examiner_report", priority: 3 },
-  NOTES: { type: "note", priority: 4 },
+  NOTES: { type: "note", priority: 5 },
+  AI_NOTES: { type: "note", priority: 5 },
+  FORMULA_SHEET: { type: "note", priority: 5 },
+  BOOK: { type: "note", priority: 5 },
+  FLASHCARDS: { type: "note", priority: 5 },
   SYLLABUS: { type: "syllabus", priority: 6 },
 };
 
@@ -84,14 +99,26 @@ export async function retrieveGroundedContext(
     .eq("resources.is_approved", true);
   if (terms.length) chunkQuery = chunkQuery.or(orFilter(terms, ["content"], 3));
 
-  const [questions, chunks] = await Promise.all([
+  const { supabaseAdmin } = await import("../lib/supabase");
+  const [questions, chunks, goldAnswers, privateChunks] = await Promise.all([
     questionQuery.order("year", { ascending: false }).limit(60),
     chunkQuery.limit(40),
+    // KC-3: Gold Dataset priority tier (Parhai's own verified prior answers).
+    fetchGoldAnswers(supabaseAdmin, subject.id, null, 3).catch(() => []),
+    // KC-3: AI_PRIVATE grounding — service-role only; never shown verbatim to a student.
+    fetchPrivateGroundingChunks(supabaseAdmin, subject.id, terms, 6).catch(() => []),
   ]);
   if (questions.error) throw questions.error;
   if (chunks.error) throw chunks.error;
 
   const sources: GroundedSource[] = [];
+
+  for (const gold of goldAnswers) {
+    sources.push({ sourceType: "gold_answer", id: gold.id, priority: 0, reference: "Parhai verified knowledge base", content: gold.content, metadata: gold.metadata });
+  }
+  for (const priv of privateChunks) {
+    sources.push({ sourceType: "resource", id: priv.id, priority: 1, reference: "Verified Parhai teaching material", content: priv.content, metadata: { ...priv.metadata, visibilityTier: priv.visibilityTier } });
+  }
 
   for (const row of questions.data ?? []) {
     const hasScheme = Boolean(row.answer_text);
@@ -105,7 +132,7 @@ export async function retrieveGroundedContext(
     sources.push({
       sourceType: hasScheme ? "marking_scheme" : "question",
       id: row.id,
-      priority: hasScheme ? 2 : 5,
+      priority: hasScheme ? 2 : 4,
       reference: formatCitation(subject, { sourceFile: row.source_file, year: row.year, session: row.session, paperCode: row.paper_code, variant: row.variant, questionNumber: row.question_number }),
       content: `Question: ${row.clean_question_text ?? row.display_question_text ?? row.question_text}${row.answer_text ? `\nOfficial marking scheme: ${row.answer_text}` : ""}${criteria}`.slice(0, 5000),
       metadata,
