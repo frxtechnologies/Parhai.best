@@ -7,6 +7,7 @@
  */
 
 import { generateAiJson, isAiConfigured } from "../lib/ai-service";
+import { classifyLocally } from "./local-topic-classifier";
 import {
   getSubjectTaxonomy,
   hasTaxonomy,
@@ -25,6 +26,7 @@ export function getAllTaxonomyTopics(): TaxonomyTopic[] {
 }
 
 const CONFIDENCE_THRESHOLD = Number(process.env.TAXONOMY_CONFIDENCE_THRESHOLD ?? "0.75");
+const LOCAL_MODEL_THRESHOLD = Number(process.env.LOCAL_TOPIC_MODEL_THRESHOLD ?? "0.6");
 
 type ClassifyResult = { topic_id: string | null; confidence: number; needs_review: boolean };
 
@@ -100,7 +102,13 @@ export async function classifyQuestionTopicId(questionText: string, subjectCode:
  * Returns null on any error so the caller falls back to keyword search.
  */
 export async function classifyQueryTopicId(queryText: string, subjectCode: string): Promise<string | null> {
-  if (!isAiConfigured() || !hasTaxonomy(subjectCode)) return null;
+  if (!hasTaxonomy(subjectCode)) return null;
+  // Try the Parhai-owned local model first — no API call. This is where API
+  // dependence actually drops: a confident local prediction skips the teacher.
+  const local = classifyLocally(queryText, subjectCode);
+  if (local && local.confidence >= LOCAL_MODEL_THRESHOLD) return local.topicId;
+  // Fall back to the API teacher only when the local model is unsure/absent.
+  if (!isAiConfigured()) return null;
   try {
     const result = await callAI(queryText, subjectCode);
     if (result.topic_id && isSubtopicOfSubject(result.topic_id, subjectCode) && result.confidence >= CONFIDENCE_THRESHOLD) {
