@@ -17,6 +17,7 @@ import { TopicClassifierModel, type TrainingLabel } from "../services/topic-clas
 import { keywordClassifyTopicId } from "../services/taxonomy-classifier";
 import { getSubjectTaxonomy, TAXONOMY_REGISTRY } from "../data/taxonomy-registry";
 import { MODEL_PATH } from "../services/local-topic-classifier";
+import { registerAndGate } from "../services/model-registry";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -91,14 +92,28 @@ async function run() {
   }
   const accuracy = testSet.length ? correct / testSet.length : 0;
 
-  fs.mkdirSync(path.dirname(MODEL_PATH), { recursive: true });
-  fs.writeFileSync(MODEL_PATH, JSON.stringify(model.toJSON()));
-
   const serialized = model.toJSON();
+  const artifact = JSON.stringify(serialized);
+  const version = `nb-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}`;
+  const metrics = { accuracy: Math.round(accuracy * 1000) / 1000, classes: serialized.classes.length, vocab: serialized.vocabSize, testSize: testSet.length };
+
   console.log(`[train] ─────────────────────────────────────────`);
   console.log(`[train] train=${trainSet.length}  test=${testSet.length}  classes=${serialized.classes.length}  vocab=${serialized.vocabSize}`);
   console.log(`[train] holdout accuracy = ${(accuracy * 100).toFixed(1)}%`);
-  console.log(`[train] model saved → ${MODEL_PATH} (${(fs.statSync(MODEL_PATH).size / 1024).toFixed(0)} KB)`);
+
+  // Eval gate + registry (Phase F). If the registry table isn't applied yet, deploy locally anyway.
+  const gate = await registerAndGate(supabase, { modelKey: "topic-classifier", version, metrics, artifact, trainSize: trainSet.length });
+  const deploy = !gate.ok || gate.promoted;
+  if (gate.ok) console.log(`[train] gate: ${gate.promoted ? "✅ PROMOTED" : "⛔ REJECTED"} — ${gate.reason}`);
+  else console.log(`[train] gate: registry unavailable (${gate.reason}) — deploying locally`);
+
+  if (deploy) {
+    fs.mkdirSync(path.dirname(MODEL_PATH), { recursive: true });
+    fs.writeFileSync(MODEL_PATH, artifact);
+    console.log(`[train] model ${version} saved → ${MODEL_PATH} (${(fs.statSync(MODEL_PATH).size / 1024).toFixed(0)} KB)`);
+  } else {
+    console.log(`[train] candidate rejected by the gate — active model on disk left unchanged.`);
+  }
 }
 
 run().catch((err) => { console.error("[train] Fatal:", err); process.exit(1); });
