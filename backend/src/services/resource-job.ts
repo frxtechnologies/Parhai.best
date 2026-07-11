@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { processResourceContent, type ProcessableResource } from "./resource-processor";
+import { runKnowledgeCenterPostProcessing } from "./knowledge-center";
 
 export async function processResourceById(client: SupabaseClient, resourceId: number) {
   const { data: resource, error } = await client.from("resources")
-    .select("id,subject_id,level,board,title,resource_type,year,session,paper_code,variant,bucket,storage_path,file_type,original_filename,related_resource_id,subjects(name,code,board)")
+    .select("id,subject_id,level,board,title,resource_type,year,session,paper_code,variant,bucket,storage_path,file_type,original_filename,related_resource_id,visibility,is_approved,subjects(name,code,board)")
     .eq("id", resourceId).single();
   if (error || !resource) throw error ?? new Error("Resource not found.");
 
@@ -51,6 +52,17 @@ export async function processResourceById(client: SupabaseClient, resourceId: nu
     if (updateError) throw updateError;
     const { error: completeJobError } = await client.from("processing_jobs").update({ status: "completed", error_message: result.classificationWarning, completed_at: completedAt, updated_at: completedAt }).eq("id", jobId);
     if (completeJobError) throw completeJobError;
+    // Knowledge Center: resource-level topic classification, graph linking, and
+    // training-candidate derivation. Best-effort — never fails an ingestion that
+    // has already succeeded.
+    const subjectCode = (Array.isArray(resource.subjects) ? resource.subjects[0] : resource.subjects)?.code as string | undefined;
+    if (subjectCode) {
+      await runKnowledgeCenterPostProcessing(
+        client,
+        { id: resourceId, subject_id: resource.subject_id, resource_type: resource.resource_type, title: resource.title, extracted_text: result.extractedText, visibility: (resource as { visibility?: string }).visibility ?? "PUBLIC", is_approved: (resource as { is_approved?: boolean }).is_approved ?? true },
+        subjectCode,
+      );
+    }
     return result;
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : cause && typeof cause === "object" && "message" in cause ? String(cause.message) : "Resource processing failed.";
