@@ -15,6 +15,7 @@ import adminIntelligenceRouter from "./admin-intelligence";
 import adminLedgerRouter from "./admin-ledger";
 import knowledgeRouter from "./knowledge";
 import adminModelsRouter from "./admin-models";
+import adminKnowledgeCenterRouter from "./admin-knowledge-center";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(adminIntelligenceRouter);
 router.use(adminLedgerRouter);
 router.use(knowledgeRouter);
 router.use(adminModelsRouter);
+router.use(adminKnowledgeCenterRouter);
 
 export default router;
