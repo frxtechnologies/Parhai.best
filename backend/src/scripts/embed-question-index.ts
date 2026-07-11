@@ -15,6 +15,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { generateDocumentEmbeddings, AI_EMBEDDING_MODEL } from "../lib/ai-service";
+import { withBackoff, sleep } from "../lib/backoff";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -73,9 +74,9 @@ async function run() {
     const texts = rows.map((r) => r.clean_question_text!.slice(0, 2000));
     let embeddings: number[][];
     try {
-      embeddings = await generateDocumentEmbeddings(texts);
+      embeddings = await withBackoff(() => generateDocumentEmbeddings(texts), { label: "embed batch", retries: 6 });
     } catch (err) {
-      console.error(`[embed] batch failed (ids ${rows[0]!.id}..${rows[rows.length - 1]!.id}):`, String(err));
+      console.error(`[embed] batch failed after retries (ids ${rows[0]!.id}..${rows[rows.length - 1]!.id}):`, String(err));
       break;
     }
 
@@ -90,6 +91,7 @@ async function run() {
 
     processed += rows.length;
     console.log(`[embed] ${embedded} embedded (scanned ${processed})`);
+    await sleep(1500); // stay under free-tier requests-per-minute
     if (rows.length < BATCH && !FORCE) break;
   }
 

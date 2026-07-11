@@ -16,6 +16,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { classifyQuestionTopicId, keywordClassifyTopicId } from "../services/taxonomy-classifier";
 import { TAXONOMY_REGISTRY } from "../data/taxonomy-registry";
+import { withBackoff, sleep } from "../lib/backoff";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -96,12 +97,13 @@ async function run() {
 
     let result: Awaited<ReturnType<typeof classifyQuestionTopicId>>;
     try {
-      result = await classifyQuestionTopicId(text, code);
+      result = await withBackoff(() => classifyQuestionTopicId(text, code), { label: `classify ${row.id}`, retries: 5 });
     } catch (err) {
-      console.warn(`[classify] row ${row.id}: AI error — ${String(err)}`);
+      console.warn(`[classify] row ${row.id}: AI error after retries — ${String(err)}`);
       const kwId = keywordClassifyTopicId(text, code);
       result = kwId ? { topic_id: kwId, confidence: 0.5, needs_review: true } : { topic_id: null, confidence: 0, needs_review: true };
     }
+    await sleep(800); // stay under free-tier requests-per-minute
 
     const tag = result.topic_id ? `${result.topic_id} (${(result.confidence * 100).toFixed(0)}%)` : "null";
     console.log(`[classify] ${code} row ${row.id} [${i + 1}/${rows.length}] → ${tag}${result.needs_review ? " [needs_review]" : ""}`);
