@@ -56,7 +56,8 @@ async function subjectId(): Promise<number | null> {
 }
 
 async function resolveTopic(query: string): Promise<string | null> {
-  return (await classifyQueryTopicId(query, SUBJECT).catch(() => null)) ?? keywordClassifyTopicId(query, SUBJECT);
+  const classified = await classifyQueryTopicId(query, SUBJECT).catch(() => ({ topicId: null, method: "none" as const }));
+  return classified.topicId ?? keywordClassifyTopicId(query, SUBJECT);
 }
 
 async function run() {

@@ -110,13 +110,14 @@ async function retrieveResourceSources(client: SupabaseClient, input: z.infer<ty
   const requestedTopic = detectRequestedTopic(input.message, subject.code);
 
   // ── Taxonomy-first topic resolution (any subject with a registered taxonomy) ─
+  // topicMethod distinguishes local-model / API-teacher / keyword-fallback so
+  // API-dependency is genuinely measurable, not just assumed from "ai".
   const subjectHasTaxonomy = hasTaxonomy(subject.code);
   let taxonomyTopicId: string | null = null;
-  let topicMethod: "ai" | "keyword" | "none" = "none";
+  let topicMethod: "local" | "api" | "keyword" | "none" = "none";
   if (subjectHasTaxonomy) {
-    // Try AI classifier first; fall back to keyword match (fast, no network).
-    const aiTopic = await classifyQueryTopicId(input.message, subject.code).catch(() => null);
-    if (aiTopic) { taxonomyTopicId = aiTopic; topicMethod = "ai"; }
+    const classified = await classifyQueryTopicId(input.message, subject.code).catch(() => ({ topicId: null, method: "none" as const }));
+    if (classified.topicId) { taxonomyTopicId = classified.topicId; topicMethod = classified.method === "none" ? "keyword" : classified.method; }
     else {
       const kwTopic = keywordClassifyTopicId(input.message, subject.code);
       if (kwTopic) { taxonomyTopicId = kwTopic; topicMethod = "keyword"; }

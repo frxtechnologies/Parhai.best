@@ -13,7 +13,7 @@ export type RetrievalTelemetry = {
   queryText: string;
   mode: string;
   resolvedTopicId: string | null;
-  topicMethod: "ai" | "keyword" | "none";
+  topicMethod: "local" | "api" | "keyword" | "none";
   retrievalStrategy: string;
   sourcesReturned: number;
   questionSources: number;

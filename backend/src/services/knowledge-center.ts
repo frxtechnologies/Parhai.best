@@ -44,9 +44,9 @@ export async function classifyResourceTopic(
   const text = `${resource.title}\n${(resource.extracted_text ?? "").slice(0, 1500)}`.trim();
   if (text.length < MIN_TEXT_FOR_CLASSIFICATION) return { topicId: null, confidence: 0 };
 
-  const aiTopic = await classifyQueryTopicId(text, subjectCode).catch(() => null);
-  const topicId = aiTopic ?? keywordClassifyTopicId(text, subjectCode);
-  const confidence = aiTopic ? 0.8 : topicId ? 0.5 : 0;
+  const classified = await classifyQueryTopicId(text, subjectCode).catch(() => ({ topicId: null, method: "none" as const }));
+  const topicId = classified.topicId ?? keywordClassifyTopicId(text, subjectCode);
+  const confidence = classified.method === "api" ? 0.85 : classified.method === "local" ? 0.75 : topicId ? 0.5 : 0;
   if (!topicId) return { topicId: null, confidence: 0 };
 
   await client.from("resources").update({ taxonomy_topic_id: topicId, confidence_score: confidence }).eq("id", resource.id);

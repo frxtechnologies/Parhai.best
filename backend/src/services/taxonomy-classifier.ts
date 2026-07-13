@@ -97,27 +97,35 @@ export async function classifyQuestionTopicId(questionText: string, subjectCode:
   return { ...first, needs_review: first.confidence < CONFIDENCE_THRESHOLD };
 }
 
+export type QueryClassification = { topicId: string | null; method: "local" | "api" | "none" };
+
 /**
  * Classify a user's incoming query at request time for a given subject.
- * Returns null on any error so the caller falls back to keyword search.
+ *
+ * Reports WHICH classifier answered (local model vs API teacher) — this is the
+ * ground truth for the platform's core "API dependency" metric. Before this,
+ * callers only received the topic id and every successful classification (local
+ * or API) was indistinguishably logged as "ai", silently making local-model
+ * usage unmeasurable. Returns method:"none" on any error so the caller falls
+ * back to keyword search.
  */
-export async function classifyQueryTopicId(queryText: string, subjectCode: string): Promise<string | null> {
-  if (!hasTaxonomy(subjectCode)) return null;
+export async function classifyQueryTopicId(queryText: string, subjectCode: string): Promise<QueryClassification> {
+  if (!hasTaxonomy(subjectCode)) return { topicId: null, method: "none" };
   // Try the Parhai-owned local model first — no API call. This is where API
   // dependence actually drops: a confident local prediction skips the teacher.
   const local = classifyLocally(queryText, subjectCode);
-  if (local && local.confidence >= LOCAL_MODEL_THRESHOLD) return local.topicId;
+  if (local && local.confidence >= LOCAL_MODEL_THRESHOLD) return { topicId: local.topicId, method: "local" };
   // Fall back to the API teacher only when the local model is unsure/absent.
-  if (!isAiConfigured()) return null;
+  if (!isAiConfigured()) return { topicId: null, method: "none" };
   try {
     const result = await callAI(queryText, subjectCode);
     if (result.topic_id && isSubtopicOfSubject(result.topic_id, subjectCode) && result.confidence >= CONFIDENCE_THRESHOLD) {
-      return result.topic_id;
+      return { topicId: result.topic_id, method: "api" };
     }
   } catch {
     // Never block a user query due to classification failure.
   }
-  return null;
+  return { topicId: null, method: "none" };
 }
 
 /**

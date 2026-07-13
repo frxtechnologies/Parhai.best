@@ -43,10 +43,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 type Case = { id: number; query_text: string; expected_topic_id: string | null };
 
-/** Mirror the live query-time resolution: AI classifier first, keyword fallback. */
-async function resolveTopic(query: string): Promise<{ topicId: string | null; method: "ai" | "keyword" | "none" }> {
-  const ai = await classifyQueryTopicId(query, SUBJECT).catch(() => null);
-  if (ai) return { topicId: ai, method: "ai" };
+/** Mirror the live query-time resolution: local model / API teacher, then keyword fallback. */
+async function resolveTopic(query: string): Promise<{ topicId: string | null; method: "local" | "api" | "keyword" | "none" }> {
+  const classified = await classifyQueryTopicId(query, SUBJECT).catch(() => ({ topicId: null, method: "none" as const }));
+  if (classified.topicId) return classified;
   const kw = keywordClassifyTopicId(query, SUBJECT);
   if (kw) return { topicId: kw, method: "keyword" };
   return { topicId: null, method: "none" };
@@ -64,7 +64,7 @@ async function run() {
   if (!cases || cases.length === 0) { console.log("[eval] No active eval cases found."); return; }
 
   let correct = 0;
-  const methodCounts: Record<string, number> = { ai: 0, keyword: 0, none: 0 };
+  const methodCounts: Record<string, number> = { local: 0, api: 0, keyword: 0, none: 0 };
   const failures: Array<{ query: string; expected: string | null; got: string | null; method: string }> = [];
 
   console.log(`\n[eval] Running ${cases.length} cases...\n`);
@@ -80,7 +80,7 @@ async function run() {
   const topicAccuracy = correct / cases.length;
   console.log(`\n[eval] ─────────────────────────────────────────`);
   console.log(`[eval] Topic accuracy: ${(topicAccuracy * 100).toFixed(1)}%  (${correct}/${cases.length})`);
-  console.log(`[eval] Resolution method: ai=${methodCounts.ai} keyword=${methodCounts.keyword} none=${methodCounts.none}`);
+  console.log(`[eval] Resolution method: local=${methodCounts.local} api=${methodCounts.api} keyword=${methodCounts.keyword} none=${methodCounts.none}`);
   if (failures.length) {
     console.log(`\n[eval] Misses:`);
     for (const f of failures) console.log(`  expected ${f.expected}  got ${f.got ?? "null"} [${f.method}]  — "${f.query.slice(0, 55)}"`);

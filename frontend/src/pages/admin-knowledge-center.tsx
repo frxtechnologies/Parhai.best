@@ -4,9 +4,9 @@ import { useAuth } from "@/context/auth-context";
 import { requireSupabase } from "@/lib/supabase";
 import {
   AlertTriangle, BarChart3, Book, Brain, Calendar, CheckSquare, ClipboardCheck,
-  Edit3, FileCheck2, FilePlus2, FileText, Folder, GraduationCap, Layers, Library,
+  Edit3, FileCheck2, FilePlus2, FileText, Folder, GraduationCap, Lightbulb, Layers, Library,
   Lock, MessageSquare, Presentation, RefreshCw, Search, Sigma, Sparkles, StickyNote,
-  Target, UploadCloud, UserCheck, Users, Video, X,
+  Target, UploadCloud, UserCheck, Users, Video, X, Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Redirect } from "wouter";
@@ -41,6 +41,17 @@ type DetectResult = {
   filename: string; matched: boolean; resourceType?: string; year?: number | null; session?: string | null;
   paperNumber?: number | null; variant?: number | null;
   subject?: { id: number; name: string; code: string; level: Level } | null;
+};
+
+type Insights = {
+  windowDays: number;
+  apiDependency: { localRate: number; apiRate: number; keywordRate: number; noneRate: number; total: number };
+  subjects: Array<{
+    subjectId: number; subjectCode: string; subjectName: string;
+    weakTopics: Array<{ topicId: string; name: string; questionCount: number; needsReviewCount: number; reason: string; severity: number }>;
+    missingResourceTypes: Array<{ resourceType: string; tier: "core" | "recommended" }>;
+    suggestedUploads: Array<{ message: string; priority: "high" | "medium" }>;
+  }>;
 };
 
 type QueueStatus = "queued" | "uploading" | "processing" | "done" | "error";
@@ -128,6 +139,7 @@ export default function AdminKnowledgeCenter() {
   const [activeCollectionId, setActiveCollectionId] = useState<number | null>(null);
   const [resources, setResources] = useState<KcResource[]>([]);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [insights, setInsights] = useState<Insights | null>(null);
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<KcResource | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -137,6 +149,7 @@ export default function AdminKnowledgeCenter() {
 
   const loadCollections = () => authedFetch("/api/admin/knowledge-center/collections").then((d) => setCollections((d as { collections: Collection[] }).collections)).catch(() => undefined);
   const loadDashboard = () => authedFetch("/api/admin/knowledge-center/dashboard").then((d) => setDashboard(d as Dashboard)).catch(() => undefined);
+  const loadInsights = () => authedFetch("/api/admin/knowledge-center/insights").then((d) => setInsights(d as Insights)).catch(() => undefined);
   const loadResources = () => {
     const params = new URLSearchParams({ limit: "60" });
     if (activeCollectionId) params.set("collection_id", String(activeCollectionId));
@@ -144,7 +157,7 @@ export default function AdminKnowledgeCenter() {
     return authedFetch(`/api/admin/knowledge-center/resources?${params}`).then((d) => setResources((d as { resources: KcResource[] }).resources)).catch(() => undefined);
   };
 
-  useEffect(() => { if (isAdmin) { void loadCollections(); void loadDashboard(); } }, [isAdmin]);
+  useEffect(() => { if (isAdmin) { void loadCollections(); void loadDashboard(); void loadInsights(); } }, [isAdmin]);
   useEffect(() => { if (isAdmin) void loadResources(); }, [isAdmin, activeCollectionId, search]);
 
   // Keyboard-friendly: "/" focuses search, matching Linear/Notion convention.
@@ -452,6 +465,44 @@ export default function AdminKnowledgeCenter() {
                 <StatCard icon={Sparkles} label="Training examples" value={dashboard.datasetGrowth.totalRecentExamples} sub={`last ${dashboard.windowDays}d`} tone="emerald" />
                 <StatCard icon={AlertTriangle} label="Needs verification" value={dashboard.needsVerification.questionsNeedingReview} tone="orange" />
               </div>
+
+              {insights && insights.apiDependency.total > 0 && (
+                <div className="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm">
+                  <h3 className="mb-1 flex items-center gap-2 font-bold text-sm text-[#1E1B4B]"><Zap className="h-4 w-4 text-emerald-500" /> API independence</h3>
+                  <p className="mb-3 text-[11px] text-slate-400">Fraction of topic classifications answered by Parhai's own local model vs the external API, last {insights.windowDays}d ({insights.apiDependency.total} queries)</p>
+                  <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
+                    <div className="bg-emerald-500" style={{ width: `${insights.apiDependency.localRate * 100}%` }} title="Local model" />
+                    <div className="bg-indigo-400" style={{ width: `${insights.apiDependency.apiRate * 100}%` }} title="API teacher" />
+                    <div className="bg-amber-300" style={{ width: `${insights.apiDependency.keywordRate * 100}%` }} title="Keyword fallback" />
+                  </div>
+                  <div className="mt-2 flex gap-4 text-[11px] text-slate-500">
+                    <span><span className="inline-block h-2 w-2 rounded-full bg-emerald-500" /> Local model {Math.round(insights.apiDependency.localRate * 100)}%</span>
+                    <span><span className="inline-block h-2 w-2 rounded-full bg-indigo-400" /> API teacher {Math.round(insights.apiDependency.apiRate * 100)}%</span>
+                    <span><span className="inline-block h-2 w-2 rounded-full bg-amber-300" /> Keyword {Math.round(insights.apiDependency.keywordRate * 100)}%</span>
+                  </div>
+                </div>
+              )}
+
+              {insights && insights.subjects.length > 0 && (
+                <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4">
+                  <h3 className="mb-3 flex items-center gap-2 font-bold text-sm text-amber-900"><Lightbulb className="h-4 w-4" /> What Parhai needs to get smarter</h3>
+                  <div className="space-y-3">
+                    {insights.subjects.map((s) => (
+                      <div key={s.subjectId} className="rounded-xl bg-white p-3">
+                        <p className="mb-1.5 text-xs font-bold text-slate-700">{s.subjectName} ({s.subjectCode})</p>
+                        <div className="space-y-1">
+                          {s.suggestedUploads.map((sug, i) => (
+                            <p key={i} className="flex items-start gap-1.5 text-[11px] text-slate-600">
+                              <span className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${sug.priority === "high" ? "bg-rose-400" : "bg-amber-400"}`} />
+                              {sug.message}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {dashboard.aiModels.active.length > 0 && (
                 <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-violet-50 p-4">

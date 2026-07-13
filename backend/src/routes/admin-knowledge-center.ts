@@ -3,6 +3,8 @@ import { z } from "zod";
 import { requireAdmin } from "../middleware/auth";
 import { supabaseAdmin } from "../lib/supabase";
 import { parseCambridgeFilenames } from "../services/cambridge-filename-parser";
+import { rankWeakTopics, findMissingResourceTypes, computeApiDependency, buildSuggestedUploads, type TopicCoverage } from "../services/intelligence-insights";
+import { getAllTaxonomyTopics } from "../services/taxonomy-classifier";
 
 const router: IRouter = Router();
 
@@ -177,6 +179,60 @@ router.get("/admin/knowledge-center/resources", requireAdmin, async (req, res): 
   const { data, error, count } = await query;
   if (error) { res.status(500).json({ error: error.message }); return; }
   res.json({ total: count ?? 0, limit, offset, resources: data ?? [] });
+});
+
+/**
+ * Intelligence Insights — "what does Parhai need to get smarter?" and "how API-
+ * independent are we?" Every number is derived deterministically from live data
+ * (no new AI calls). This is the platform reporting on its own knowledge health.
+ */
+router.get("/admin/knowledge-center/insights", requireAdmin, async (req, res): Promise<void> => {
+  const days = Math.min(Math.max(Number(req.query.days ?? 30), 1), 90);
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+
+  const [subjectsRes, questionRows, resourceRows, telemetryRows] = await Promise.all([
+    supabaseAdmin.from("subjects").select("id,name,code"),
+    supabaseAdmin.from("question_index").select("subject_id,taxonomy_topic_id,needs_review").not("taxonomy_topic_id", "is", null).limit(50000),
+    supabaseAdmin.from("resources").select("subject_id,resource_type").limit(50000),
+    supabaseAdmin.from("ai_retrieval_telemetry").select("topic_method").gte("created_at", since).limit(50000),
+  ]);
+  if (subjectsRes.error) { res.status(500).json({ error: subjectsRes.error.message }); return; }
+
+  const topicNameById = new Map(getAllTaxonomyTopics().map((t) => [t.id, t.name]));
+  const qRows = questionRows.data ?? [];
+  const rRows = resourceRows.data ?? [];
+
+  const bySubject = (subjectsRes.data ?? []).map((subject) => {
+    const coverageMap = new Map<string, TopicCoverage>();
+    for (const q of qRows) {
+      if (q.subject_id !== subject.id || !q.taxonomy_topic_id) continue;
+      const entry = coverageMap.get(q.taxonomy_topic_id) ?? { topicId: q.taxonomy_topic_id, name: topicNameById.get(q.taxonomy_topic_id) ?? q.taxonomy_topic_id, questionCount: 0, needsReviewCount: 0 };
+      entry.questionCount += 1;
+      if (q.needs_review) entry.needsReviewCount += 1;
+      coverageMap.set(q.taxonomy_topic_id, entry);
+    }
+    const weakTopics = rankWeakTopics([...coverageMap.values()]);
+    const existingTypes = new Set(rRows.filter((r) => r.subject_id === subject.id).map((r) => r.resource_type));
+    const missing = findMissingResourceTypes(existingTypes);
+    return {
+      subjectId: subject.id, subjectCode: subject.code, subjectName: subject.name,
+      weakTopics: weakTopics.slice(0, 10), missingResourceTypes: missing,
+      suggestedUploads: buildSuggestedUploads(subject.id, subject.name, weakTopics, missing).slice(0, 8),
+    };
+  }).filter((s) => s.weakTopics.length > 0 || s.missingResourceTypes.length > 0);
+
+  const methodCounts = { local: 0, api: 0, keyword: 0, none: 0 };
+  for (const row of telemetryRows.data ?? []) {
+    const m = row.topic_method as keyof typeof methodCounts | "ai" | null;
+    if (m === "local" || m === "api" || m === "keyword" || m === "none") methodCounts[m] += 1;
+    else if (m === "ai") methodCounts.api += 1; // legacy rows written before the local/api split
+  }
+
+  res.json({
+    windowDays: days,
+    apiDependency: computeApiDependency(methodCounts),
+    subjects: bySubject,
+  });
 });
 
 export default router;
