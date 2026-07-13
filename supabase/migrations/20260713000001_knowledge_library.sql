@@ -128,7 +128,9 @@ create index if not exists resources_collection_idx on public.resources (collect
 
 alter table public.knowledge_collections enable row level security;
 alter table public.resource_type_collection_map enable row level security;
+drop policy if exists "knowledge_collections_read" on public.knowledge_collections;
 create policy "knowledge_collections_read" on public.knowledge_collections for select using (true);
+drop policy if exists "resource_type_collection_map_read" on public.resource_type_collection_map;
 create policy "resource_type_collection_map_read" on public.resource_type_collection_map for select using (true);
 
 -- ─────────────────────────────────────────────────────────────────────────────

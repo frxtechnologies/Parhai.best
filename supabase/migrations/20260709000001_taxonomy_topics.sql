@@ -21,9 +21,11 @@ create index if not exists taxonomy_topics_parent_id_idx    on public.taxonomy_t
 alter table public.taxonomy_topics enable row level security;
 
 -- Admin can manage; anon/authenticated can only read
+drop policy if exists "taxonomy_topics_read" on public.taxonomy_topics;
 create policy "taxonomy_topics_read" on public.taxonomy_topics
   for select using (true);
 
+drop policy if exists "taxonomy_topics_admin_write" on public.taxonomy_topics;
 create policy "taxonomy_topics_admin_write" on public.taxonomy_topics
   for all using (
     exists (

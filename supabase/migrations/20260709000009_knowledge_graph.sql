@@ -24,8 +24,10 @@ create index if not exists knowledge_edges_subject_type_idx on public.knowledge_
 
 alter table public.knowledge_edges enable row level security;
 
+drop policy if exists "knowledge_edges_read" on public.knowledge_edges;
 create policy "knowledge_edges_read" on public.knowledge_edges
   for select using (true);
+drop policy if exists "knowledge_edges_admin_write" on public.knowledge_edges;
 create policy "knowledge_edges_admin_write" on public.knowledge_edges
   for all using (
     exists (select 1 from public.admin_users au

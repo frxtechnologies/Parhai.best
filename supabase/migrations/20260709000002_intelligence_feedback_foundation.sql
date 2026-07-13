@@ -36,6 +36,7 @@ alter table public.ai_retrieval_telemetry enable row level security;
 
 -- Authenticated users may insert their OWN telemetry rows (the API uses the
 -- user-scoped client). Reading is admin-only (via service role, which bypasses RLS).
+drop policy if exists "telemetry_insert_own" on public.ai_retrieval_telemetry;
 create policy "telemetry_insert_own" on public.ai_retrieval_telemetry
   for insert with check (auth.uid() = user_id);
 
@@ -60,8 +61,10 @@ create index if not exists ai_answer_feedback_rating_idx
 
 alter table public.ai_answer_feedback enable row level security;
 
+drop policy if exists "feedback_insert_own" on public.ai_answer_feedback;
 create policy "feedback_insert_own" on public.ai_answer_feedback
   for insert with check (auth.uid() = user_id);
+drop policy if exists "feedback_read_own" on public.ai_answer_feedback;
 create policy "feedback_read_own" on public.ai_answer_feedback
   for select using (auth.uid() = user_id);
 

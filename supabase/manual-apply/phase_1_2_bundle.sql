@@ -1,10 +1,12 @@
 -- ============================================================================
 -- PARHAI — Full schema bundle (paste-once into Supabase SQL Editor)
 -- Project: izzywbkohqzbnhnvqzaa
--- Regenerated 2026-07-13. Applies migrations 20260709000001..20260713000001
--- in order. Every migration is idempotent (if not exists / on conflict do
--- nothing) so it is SAFE to re-run in full even if some of these already
--- applied piecemeal via the SQL editor — nothing here is destructive.
+-- Regenerated 2026-07-14: every `create policy` is now preceded by a matching
+-- `drop policy if exists`, so a partial or repeated run never errors on
+-- "policy already exists". Applies migrations 20260709000001..20260713000001
+-- in order. Fully idempotent — safe to re-run in full even after a partial
+-- application (this bundle's prior version was NOT idempotent for policies;
+-- that bug is fixed here).
 -- ============================================================================
 
 
@@ -32,9 +34,11 @@ create index if not exists taxonomy_topics_parent_id_idx    on public.taxonomy_t
 alter table public.taxonomy_topics enable row level security;
 
 -- Admin can manage; anon/authenticated can only read
+drop policy if exists "taxonomy_topics_read" on public.taxonomy_topics;
 create policy "taxonomy_topics_read" on public.taxonomy_topics
   for select using (true);
 
+drop policy if exists "taxonomy_topics_admin_write" on public.taxonomy_topics;
 create policy "taxonomy_topics_admin_write" on public.taxonomy_topics
   for all using (
     exists (
@@ -159,6 +163,7 @@ alter table public.ai_retrieval_telemetry enable row level security;
 
 -- Authenticated users may insert their OWN telemetry rows (the API uses the
 -- user-scoped client). Reading is admin-only (via service role, which bypasses RLS).
+drop policy if exists "telemetry_insert_own" on public.ai_retrieval_telemetry;
 create policy "telemetry_insert_own" on public.ai_retrieval_telemetry
   for insert with check (auth.uid() = user_id);
 
@@ -183,8 +188,10 @@ create index if not exists ai_answer_feedback_rating_idx
 
 alter table public.ai_answer_feedback enable row level security;
 
+drop policy if exists "feedback_insert_own" on public.ai_answer_feedback;
 create policy "feedback_insert_own" on public.ai_answer_feedback
   for insert with check (auth.uid() = user_id);
+drop policy if exists "feedback_read_own" on public.ai_answer_feedback;
 create policy "feedback_read_own" on public.ai_answer_feedback
   for select using (auth.uid() = user_id);
 
@@ -466,8 +473,10 @@ alter table public.ai_interaction_ledger enable row level security;
 
 -- Users insert and may update the verification of their OWN rows (student feedback
 -- loop). Reading the corpus is admin-only via the service role (bypasses RLS).
+drop policy if exists "ledger_insert_own" on public.ai_interaction_ledger;
 create policy "ledger_insert_own" on public.ai_interaction_ledger
   for insert with check (auth.uid() = user_id);
+drop policy if exists "ledger_update_own" on public.ai_interaction_ledger;
 create policy "ledger_update_own" on public.ai_interaction_ledger
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -512,8 +521,10 @@ create index if not exists knowledge_edges_subject_type_idx on public.knowledge_
 
 alter table public.knowledge_edges enable row level security;
 
+drop policy if exists "knowledge_edges_read" on public.knowledge_edges;
 create policy "knowledge_edges_read" on public.knowledge_edges
   for select using (true);
+drop policy if exists "knowledge_edges_admin_write" on public.knowledge_edges;
 create policy "knowledge_edges_admin_write" on public.knowledge_edges
   for all using (
     exists (select 1 from public.admin_users au
@@ -636,10 +647,12 @@ create index if not exists resources_taxonomy_topic_idx on public.resources (tax
 --    never via a student-scoped client.
 -- ─────────────────────────────────────────────────────────────────────────────
 drop policy if exists "Approved resources readable by signed-in users" on public.resources;
+drop policy if exists "Student-visible approved resources readable by signed-in users" on public.resources;
 create policy "Student-visible approved resources readable by signed-in users" on public.resources
   for select to authenticated using (is_approved and visible_to_students);
 
 drop policy if exists "Approved AI chunks readable by signed-in users" on public.ai_chunks;
+drop policy if exists "Student-visible approved AI chunks readable by signed-in users" on public.ai_chunks;
 create policy "Student-visible approved AI chunks readable by signed-in users" on public.ai_chunks
   for select to authenticated using (
     exists (
@@ -649,10 +662,12 @@ create policy "Student-visible approved AI chunks readable by signed-in users" o
   );
 
 -- Admins may read every visibility tier (Knowledge Center management UI).
+drop policy if exists "Admins read all resources" on public.resources;
 create policy "Admins read all resources" on public.resources
   for select to authenticated using (
     exists (select 1 from public.admin_users au where au.email = (select email from auth.users where id = auth.uid()))
   );
+drop policy if exists "Admins read all ai_chunks" on public.ai_chunks;
 create policy "Admins read all ai_chunks" on public.ai_chunks
   for select to authenticated using (
     exists (select 1 from public.admin_users au where au.email = (select email from auth.users where id = auth.uid()))
@@ -854,7 +869,9 @@ create index if not exists resources_collection_idx on public.resources (collect
 
 alter table public.knowledge_collections enable row level security;
 alter table public.resource_type_collection_map enable row level security;
+drop policy if exists "knowledge_collections_read" on public.knowledge_collections;
 create policy "knowledge_collections_read" on public.knowledge_collections for select using (true);
+drop policy if exists "resource_type_collection_map_read" on public.resource_type_collection_map;
 create policy "resource_type_collection_map_read" on public.resource_type_collection_map for select using (true);
 
 -- ─────────────────────────────────────────────────────────────────────────────

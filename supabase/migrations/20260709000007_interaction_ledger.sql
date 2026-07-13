@@ -52,8 +52,10 @@ alter table public.ai_interaction_ledger enable row level security;
 
 -- Users insert and may update the verification of their OWN rows (student feedback
 -- loop). Reading the corpus is admin-only via the service role (bypasses RLS).
+drop policy if exists "ledger_insert_own" on public.ai_interaction_ledger;
 create policy "ledger_insert_own" on public.ai_interaction_ledger
   for insert with check (auth.uid() = user_id);
+drop policy if exists "ledger_update_own" on public.ai_interaction_ledger;
 create policy "ledger_update_own" on public.ai_interaction_ledger
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 

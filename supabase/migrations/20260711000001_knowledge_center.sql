@@ -54,10 +54,12 @@ create index if not exists resources_taxonomy_topic_idx on public.resources (tax
 --    never via a student-scoped client.
 -- ─────────────────────────────────────────────────────────────────────────────
 drop policy if exists "Approved resources readable by signed-in users" on public.resources;
+drop policy if exists "Student-visible approved resources readable by signed-in users" on public.resources;
 create policy "Student-visible approved resources readable by signed-in users" on public.resources
   for select to authenticated using (is_approved and visible_to_students);
 
 drop policy if exists "Approved AI chunks readable by signed-in users" on public.ai_chunks;
+drop policy if exists "Student-visible approved AI chunks readable by signed-in users" on public.ai_chunks;
 create policy "Student-visible approved AI chunks readable by signed-in users" on public.ai_chunks
   for select to authenticated using (
     exists (
@@ -67,10 +69,12 @@ create policy "Student-visible approved AI chunks readable by signed-in users" o
   );
 
 -- Admins may read every visibility tier (Knowledge Center management UI).
+drop policy if exists "Admins read all resources" on public.resources;
 create policy "Admins read all resources" on public.resources
   for select to authenticated using (
     exists (select 1 from public.admin_users au where au.email = (select email from auth.users where id = auth.uid()))
   );
+drop policy if exists "Admins read all ai_chunks" on public.ai_chunks;
 create policy "Admins read all ai_chunks" on public.ai_chunks
   for select to authenticated using (
     exists (select 1 from public.admin_users au where au.email = (select email from auth.users where id = auth.uid()))
