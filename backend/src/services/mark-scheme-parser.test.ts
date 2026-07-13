@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseMarkingPoints, formatMarkingCriteria } from "./mark-scheme-parser";
+import { parseMarkingPoints, formatMarkingCriteria, isReliableMarkingSchemeText } from "./mark-scheme-parser";
 
 test("splits Cambridge ';'-separated marking points and distributes marks", () => {
   const pts = parseMarkingPoints("correct equation F = ma; substitution 1200 x 2; force = 2400 N", 3);
@@ -39,4 +39,22 @@ test("empty scheme yields no points; formatter lists criteria", () => {
   const out = formatMarkingCriteria(parseMarkingPoints("a; b", 2));
   assert.match(out, /1\. \[1 mark\] a/);
   assert.match(out, /2\. \[1 mark\] b/);
+});
+
+test("isReliableMarkingSchemeText accepts a normal short scheme", () => {
+  assert.equal(isReliableMarkingSchemeText("correct equation F = ma; substitution; force = 2400 N"), true);
+  assert.equal(isReliableMarkingSchemeText("3.5 (cm) 1"), true);
+});
+
+test("isReliableMarkingSchemeText rejects PDF page boilerplate", () => {
+  assert.equal(isReliableMarkingSchemeText("A 1 5054/11 Cambridge O Level – Mark Scheme PUBLISHED May/June 2023 © UCLES 2023 Page 3 of 3 Question Answer Marks"), false);
+});
+
+test("isReliableMarkingSchemeText rejects implausibly long multi-question bleed", () => {
+  assert.equal(isReliableMarkingSchemeText("x".repeat(700)), false);
+});
+
+test("isReliableMarkingSchemeText rejects empty/blank text", () => {
+  assert.equal(isReliableMarkingSchemeText(""), false);
+  assert.equal(isReliableMarkingSchemeText("   "), false);
 });

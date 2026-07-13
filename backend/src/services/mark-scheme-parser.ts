@@ -92,3 +92,23 @@ export function formatMarkingCriteria(points: MarkingPoint[]): string {
     .map((p) => `${p.index}. [${p.marks} mark${p.marks === 1 ? "" : "s"}${p.code ? `, ${p.code}` : ""}] ${p.text}`)
     .join("\n");
 }
+
+const BOILERPLATE_PATTERN = /Cambridge\s+(O\s+Level|IGCSE)|Mark\s+Scheme|PUBLISHED|UCLES|Page\s+\d+\s+of\s+\d+|University\s+Press/i;
+const MAX_PLAUSIBLE_SCHEME_LENGTH = 600;
+
+/**
+ * Sanity gate for whether raw scheme text is trustworthy enough to parse into
+ * structured marking_points. A single question's marking scheme is short; text
+ * that is very long or carries PDF page boilerplate (headers/footers, "Page 3
+ * of 3", publisher notices) is almost always contamination from the upstream
+ * extraction bleeding multiple questions or page furniture into one row — that
+ * must be caught here, not silently promoted into "ground truth" criteria the
+ * Paper Checker then trusts.
+ */
+export function isReliableMarkingSchemeText(text: string): boolean {
+  const clean = (text ?? "").trim();
+  if (!clean) return false;
+  if (clean.length > MAX_PLAUSIBLE_SCHEME_LENGTH) return false;
+  if (BOILERPLATE_PATTERN.test(clean)) return false;
+  return true;
+}
