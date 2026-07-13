@@ -1,10 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { processResourceContent, type ProcessableResource } from "./resource-processor";
+import { processResourceContent, type ProcessableResource, type ProcessingStage } from "./resource-processor";
 import { runKnowledgeCenterPostProcessing } from "./knowledge-center";
 
 export async function processResourceById(client: SupabaseClient, resourceId: number) {
   const { data: resource, error } = await client.from("resources")
-    .select("id,subject_id,level,board,title,resource_type,year,session,paper_code,variant,bucket,storage_path,file_type,original_filename,related_resource_id,visibility,is_approved,subjects(name,code,board)")
+    .select("id,subject_id,level,board,title,resource_type,year,session,paper_code,variant,bucket,storage_path,file_type,original_filename,related_resource_id,visible_to_students,visible_to_ai,visible_to_training,is_approved,subjects(name,code,board)")
     .eq("id", resourceId).single();
   if (error || !resource) throw error ?? new Error("Resource not found.");
 
@@ -15,10 +15,10 @@ export async function processResourceById(client: SupabaseClient, resourceId: nu
   let jobId: number;
   if (previousJob && ["uploaded", "extracting", "indexing"].includes(previousJob.status)) {
     jobId = Number(previousJob.id);
-    const { error: jobError } = await client.from("processing_jobs").update({ status: "extracting", error_message: null, started_at: now, updated_at: now }).eq("id", jobId);
+    const { error: jobError } = await client.from("processing_jobs").update({ status: "extracting", stage: "reading_pdf", error_message: null, started_at: now, updated_at: now }).eq("id", jobId);
     if (jobError) throw jobError;
   } else {
-    const { data: job, error: jobError } = await client.from("processing_jobs").insert({ resource_id: resourceId, status: "extracting", retry_count: Number(previousJob?.retry_count ?? 0) + 1, started_at: now }).select("id").single();
+    const { data: job, error: jobError } = await client.from("processing_jobs").insert({ resource_id: resourceId, status: "extracting", stage: "reading_pdf", retry_count: Number(previousJob?.retry_count ?? 0) + 1, started_at: now }).select("id").single();
     if (jobError || !job) throw jobError ?? new Error("Could not create processing job.");
     jobId = Number(job.id);
   }
@@ -26,9 +26,12 @@ export async function processResourceById(client: SupabaseClient, resourceId: nu
   try {
     const { error: processingError } = await client.from("resources").update({ status: "processing", processing_status: "processing", processing_error: null, updated_at: now }).eq("id", resourceId);
     if (processingError) throw processingError;
-    const result = await processResourceContent(client, resource as unknown as ProcessableResource, async () => {
-      const { error: indexingError } = await client.from("processing_jobs").update({ status: "indexing", updated_at: new Date().toISOString() }).eq("id", jobId);
-      if (indexingError) throw indexingError;
+    const result = await processResourceContent(client, resource as unknown as ProcessableResource, async (stage: ProcessingStage) => {
+      // "extracting_questions" is also the moment question_index rows get written
+      // (indexing) — keep the coarse `status` in step for callers that only watch it.
+      const coarseStatus = stage === "reading_pdf" ? "extracting" : "indexing";
+      const { error: stageError } = await client.from("processing_jobs").update({ status: coarseStatus, stage, updated_at: new Date().toISOString() }).eq("id", jobId);
+      if (stageError) throw stageError;
     });
     const completedAt = new Date().toISOString();
     const topicStatus = result.indexedQuestions
@@ -50,19 +53,27 @@ export async function processResourceById(client: SupabaseClient, resourceId: nu
       updated_at: completedAt,
     }).eq("id", resourceId);
     if (updateError) throw updateError;
-    const { error: completeJobError } = await client.from("processing_jobs").update({ status: "completed", error_message: result.classificationWarning, completed_at: completedAt, updated_at: completedAt }).eq("id", jobId);
-    if (completeJobError) throw completeJobError;
     // Knowledge Center: resource-level topic classification, graph linking, and
     // training-candidate derivation. Best-effort — never fails an ingestion that
-    // has already succeeded.
+    // has already succeeded. Reported as its own pipeline stages.
+    await client.from("processing_jobs").update({ stage: "knowledge_graph", updated_at: new Date().toISOString() }).eq("id", jobId);
     const subjectCode = (Array.isArray(resource.subjects) ? resource.subjects[0] : resource.subjects)?.code as string | undefined;
+    const typedResource = resource as unknown as { visible_to_students: boolean; visible_to_ai: boolean; visible_to_training: boolean; is_approved: boolean };
     if (subjectCode) {
+      await client.from("processing_jobs").update({ stage: "training_dataset", updated_at: new Date().toISOString() }).eq("id", jobId);
       await runKnowledgeCenterPostProcessing(
         client,
-        { id: resourceId, subject_id: resource.subject_id, resource_type: resource.resource_type, title: resource.title, extracted_text: result.extractedText, visibility: (resource as { visibility?: string }).visibility ?? "PUBLIC", is_approved: (resource as { is_approved?: boolean }).is_approved ?? true },
+        {
+          id: resourceId, subject_id: resource.subject_id, resource_type: resource.resource_type, title: resource.title,
+          extracted_text: result.extractedText, visible_to_students: typedResource.visible_to_students ?? true,
+          visible_to_ai: typedResource.visible_to_ai ?? true, visible_to_training: typedResource.visible_to_training ?? true,
+          is_approved: typedResource.is_approved ?? true,
+        },
         subjectCode,
       );
     }
+    const { error: completeJobError } = await client.from("processing_jobs").update({ status: "completed", stage: "completed", error_message: result.classificationWarning, completed_at: completedAt, updated_at: completedAt }).eq("id", jobId);
+    if (completeJobError) throw completeJobError;
     return result;
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : cause && typeof cause === "object" && "message" in cause ? String(cause.message) : "Resource processing failed.";

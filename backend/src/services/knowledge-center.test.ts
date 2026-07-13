@@ -17,7 +17,8 @@ function fakeClient(calledTables: string[]) {
 
 const baseResource: LinkableResource = {
   id: 1, subject_id: 5, resource_type: "TEACHER_NOTES", title: "Forces notes",
-  extracted_text: "x".repeat(500), visibility: "PUBLIC", is_approved: true,
+  extracted_text: "x".repeat(500), visible_to_students: true, visible_to_ai: true,
+  visible_to_training: true, is_approved: true,
 };
 
 test("deriveTrainingCandidate skips non note-like resource types", async () => {
@@ -27,9 +28,9 @@ test("deriveTrainingCandidate skips non note-like resource types", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("deriveTrainingCandidate skips ADMIN_ONLY resources", async () => {
+test("deriveTrainingCandidate skips resources that opted out of training use", async () => {
   const calls: string[] = [];
-  const ok = await deriveTrainingCandidate(fakeClient(calls), { ...baseResource, visibility: "ADMIN_ONLY" }, "0625", "phys.motion.forces");
+  const ok = await deriveTrainingCandidate(fakeClient(calls), { ...baseResource, visible_to_training: false }, "0625", "phys.motion.forces");
   assert.equal(ok, false);
   assert.equal(calls.length, 0);
 });

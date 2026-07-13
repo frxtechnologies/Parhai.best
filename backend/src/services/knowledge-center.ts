@@ -19,7 +19,9 @@ export type LinkableResource = {
   resource_type: string;
   title: string;
   extracted_text: string | null;
-  visibility: string;
+  visible_to_students: boolean;
+  visible_to_ai: boolean;
+  visible_to_training: boolean;
   is_approved: boolean;
 };
 
@@ -91,7 +93,7 @@ export async function deriveTrainingCandidate(
   topicId: string | null,
 ): Promise<boolean> {
   if (!NOTE_LIKE_TYPES.has(resource.resource_type)) return false;
-  if (resource.visibility === "ADMIN_ONLY") return false; // never surfaced as training signal
+  if (!resource.visible_to_training) return false; // this resource opted out of training use
   const text = (resource.extracted_text ?? "").trim();
   if (text.length < MIN_TEXT_FOR_TRAINING_CANDIDATE) return false;
 
@@ -107,7 +109,7 @@ export async function deriveTrainingCandidate(
     instruction: "Explain this Cambridge teaching resource clearly to a student.",
     input: resource.title,
     output,
-    metadata: { resourceId: resource.id, resourceType: resource.resource_type, visibility: resource.visibility },
+    metadata: { resourceId: resource.id, resourceType: resource.resource_type, visibleToStudents: resource.visible_to_students },
     content_hash: hash,
   }, { onConflict: "dataset_version,content_hash", ignoreDuplicates: true });
   return !error;

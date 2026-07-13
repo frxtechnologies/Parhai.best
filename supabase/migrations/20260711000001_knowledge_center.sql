@@ -19,11 +19,18 @@ alter table public.resources add constraint resources_resource_type_check check 
 ));
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 2. Visibility tiers (independent of is_approved)
+-- 2. Visibility: four independent permissions, not a single tier enum.
+--    A resource can be any combination — e.g. a private teaching guide is
+--    Students:false, AI:true, Training:true, Admin:true. visible_to_admin
+--    defaults true (every resource is always staff-visible in the Knowledge
+--    Library) and is not itself security-critical; the enforcement boundary
+--    that matters is visible_to_students, checked by RLS below.
 -- ─────────────────────────────────────────────────────────────────────────────
 alter table public.resources
-  add column if not exists visibility text not null default 'PUBLIC'
-    check (visibility in ('PUBLIC','AI_PRIVATE','TRAINING_ONLY','ADMIN_ONLY'));
+  add column if not exists visible_to_students boolean not null default true,
+  add column if not exists visible_to_ai boolean not null default true,
+  add column if not exists visible_to_training boolean not null default true,
+  add column if not exists visible_to_admin boolean not null default true;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. Resource-level knowledge metadata (topic, difficulty, source, confidence)
@@ -34,26 +41,28 @@ alter table public.resources
   add column if not exists source text,
   add column if not exists confidence_score real check (confidence_score is null or (confidence_score >= 0 and confidence_score <= 1));
 
-create index if not exists resources_visibility_idx on public.resources (visibility, is_approved);
+create index if not exists resources_visible_to_students_idx on public.resources (visible_to_students, is_approved);
+create index if not exists resources_visible_to_ai_idx on public.resources (visible_to_ai) where visible_to_ai;
 create index if not exists resources_taxonomy_topic_idx on public.resources (taxonomy_topic_id) where taxonomy_topic_id is not null;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. RLS: replace the single is_approved gate with visibility-aware policies.
---    Regular authenticated users (students) can ONLY select PUBLIC+approved rows.
---    AI_PRIVATE/TRAINING_ONLY/ADMIN_ONLY are invisible to the authenticated role
---    at the database level — grounding for those tiers is done server-side via
---    the service role, never via a student-scoped client.
+--    Regular authenticated users (students) can ONLY select rows with
+--    visible_to_students = true (and approved). Everything else is invisible
+--    to the authenticated role at the database level — grounding for
+--    non-student-visible content is done server-side via the service role,
+--    never via a student-scoped client.
 -- ─────────────────────────────────────────────────────────────────────────────
 drop policy if exists "Approved resources readable by signed-in users" on public.resources;
-create policy "Public approved resources readable by signed-in users" on public.resources
-  for select to authenticated using (is_approved and visibility = 'PUBLIC');
+create policy "Student-visible approved resources readable by signed-in users" on public.resources
+  for select to authenticated using (is_approved and visible_to_students);
 
 drop policy if exists "Approved AI chunks readable by signed-in users" on public.ai_chunks;
-create policy "Public approved AI chunks readable by signed-in users" on public.ai_chunks
+create policy "Student-visible approved AI chunks readable by signed-in users" on public.ai_chunks
   for select to authenticated using (
     exists (
       select 1 from public.resources r
-      where r.id = public.ai_chunks.resource_id and r.is_approved and r.visibility = 'PUBLIC'
+      where r.id = public.ai_chunks.resource_id and r.is_approved and r.visible_to_students
     )
   );
 
@@ -112,7 +121,9 @@ $$;
 create or replace view public.knowledge_center_processing_status as
 select
   r.resource_type,
-  r.visibility,
+  r.visible_to_students,
+  r.visible_to_ai,
+  r.visible_to_training,
   r.processing_status,
   count(*)::int as resource_count,
   count(*) filter (where r.extracted_text is not null)::int as extracted_count,
@@ -120,7 +131,7 @@ select
   count(distinct c.resource_id) filter (where c.embedding is not null)::int as embedded_count
 from public.resources r
 left join public.ai_chunks c on c.resource_id = r.id
-group by r.resource_type, r.visibility, r.processing_status;
+group by r.resource_type, r.visible_to_students, r.visible_to_ai, r.visible_to_training, r.processing_status;
 
 create or replace view public.knowledge_center_failed_jobs as
 select j.id, j.resource_id, r.title, r.resource_type, j.status, j.error_message, j.retry_count, j.updated_at

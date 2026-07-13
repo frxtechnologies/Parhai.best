@@ -1,18 +1,20 @@
 /**
  * Visibility-tiered grounding (KC-3) — the enforcement layer that makes
- * "students must NEVER view or download AI_PRIVATE/TRAINING_ONLY resources, but
+ * "students must NEVER view or download AI-only/training-only resources, but
  * the AI may use them" actually true end-to-end, not just at the RLS layer.
  *
- * RLS (migration 20260711000001) already makes non-PUBLIC resources/chunks
- * invisible to the regular authenticated role — a student-scoped client can
- * never read them, full stop. This module supplies the ONE sanctioned path for
- * the AI to still ground answers in AI_PRIVATE content: a service-role query,
- * used only server-side, whose results are (a) never returned to the client
- * with any identifying/downloadable reference and (b) subject to an explicit
+ * Visibility is four independent permissions (migration 20260711000001):
+ * visible_to_students / visible_to_ai / visible_to_training / visible_to_admin.
+ * RLS already makes visible_to_students=false resources/chunks invisible to the
+ * regular authenticated role — a student-scoped client can never read them,
+ * full stop. This module supplies the ONE sanctioned path for the AI to still
+ * ground answers in non-student-visible content: a service-role query, used
+ * only server-side, whose results are (a) never returned to the client with
+ * any identifying/downloadable reference and (b) subject to an explicit
  * "paraphrase, never quote" prompt rule.
  *
- * TRAINING_ONLY is deliberately NEVER queried here — per spec it exists only
- * for the Phase D dataset builder, not for live answer grounding.
+ * visible_to_training is deliberately NEVER queried here — per spec that flag
+ * exists only for the Phase D dataset builder, not for live answer grounding.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -26,9 +28,9 @@ export type PrivateGroundingSource = {
 };
 
 /**
- * Fetch AI_PRIVATE chunks for grounding via the service role. Keyword-matched
- * (cheap, no extra embedding call) against the same expanded terms the public
- * retrieval path already computed.
+ * Fetch AI-usable-but-not-student-visible chunks for grounding via the service
+ * role. Keyword-matched (cheap, no extra embedding call) against the same
+ * expanded terms the public retrieval path already computed.
  */
 export async function fetchPrivateGroundingChunks(
   adminClient: SupabaseClient,
@@ -39,9 +41,10 @@ export async function fetchPrivateGroundingChunks(
   if (terms.length === 0) return [];
   const query = adminClient
     .from("ai_chunks")
-    .select("id,content,resources!inner(id,resource_type,visibility,is_approved,title)")
+    .select("id,content,resources!inner(id,resource_type,visible_to_ai,visible_to_students,is_approved,title)")
     .eq("subject_id", subjectId)
-    .eq("resources.visibility", "AI_PRIVATE")
+    .eq("resources.visible_to_ai", true)
+    .eq("resources.visible_to_students", false)
     .eq("resources.is_approved", true)
     .or(terms.slice(0, 3).map((t) => `content.ilike.%${t}%`).join(","));
   const { data, error } = await query.limit(limit);
