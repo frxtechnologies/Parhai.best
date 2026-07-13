@@ -40,21 +40,30 @@ type Row = { id: number; answer_text: string; total_marks: number | null; marks:
 async function run() {
   console.log(`[backfill-marking-points] force=${FORCE} dry-run=${DRY_RUN} limit=${LIMIT}`);
 
-  let processed = 0, updated = 0, emptyResult = 0, skippedContaminated = 0;
-  for (let offset = 0; processed < LIMIT; offset += BATCH) {
+  // Keyset (id-cursor) pagination, NOT offset-based: in the default (non-force)
+  // mode this loop filters on marking_points IS NULL while ALSO writing
+  // marking_points inside the same loop, so the matching set shrinks as it
+  // goes. Offset pagination over a shrinking filtered set skips rows (the
+  // bug this replaced — a live run silently stopped at 1500/2564 scanned).
+  // Advancing a strictly-increasing `id > lastId` cursor is immune to that:
+  // it never depends on how many rows currently match the filter.
+  let lastId = 0, processed = 0, updated = 0, emptyResult = 0, skippedContaminated = 0;
+  while (processed < LIMIT) {
     const take = Math.min(BATCH, LIMIT - processed);
     let query = supabase
       .from("question_index")
       .select("id,answer_text,total_marks,marks")
       .not("answer_text", "is", null)
+      .gt("id", lastId)
       .order("id", { ascending: true })
-      .range(offset, offset + take - 1);
+      .limit(take);
     if (!FORCE) query = query.is("marking_points", null);
 
     const { data, error } = await query;
     if (error) throw error;
     const rows = (data ?? []) as Row[];
     if (rows.length === 0) break;
+    lastId = rows[rows.length - 1]!.id;
 
     for (const row of rows) {
       // Sanity gate FIRST: never promote PDF boilerplate or multi-question bleed
