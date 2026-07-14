@@ -498,16 +498,33 @@ function LoadingSkeleton() {
 
 /* ─── Error state ─── */
 
+/**
+ * Supabase/Postgrest errors are plain objects ({message, details, hint, code}),
+ * NOT `instanceof Error` — the old `error instanceof Error` check silently
+ * swallowed every real Supabase error and showed a generic "connect Supabase"
+ * fallback instead, hiding the actual cause. Extract a message from whatever
+ * shape the error actually is.
+ */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const parts = [record.message, record.details, record.hint].filter((v): v is string => typeof v === "string" && v.length > 0);
+    if (parts.length) return parts.join(" — ");
+    if (record.code) return `Error code: ${String(record.code)}`;
+  }
+  return "An unknown error occurred loading your workspace. Please try refreshing.";
+}
+
 function ErrorState({ error }: { error: unknown }) {
+  if (import.meta.env.DEV) console.error("[Dashboard] load failed:", error);
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50">
         <Settings className="h-7 w-7 text-red-400" />
       </div>
       <h2 className="text-lg font-bold text-[#1E1B4B]">Dashboard not ready</h2>
-      <p className="mt-1 max-w-sm text-sm text-slate-400">
-        {error instanceof Error ? error.message : "Connect Supabase and complete onboarding to load your workspace."}
-      </p>
+      <p className="mt-1 max-w-sm text-sm text-slate-400">{describeError(error)}</p>
     </div>
   );
 }
